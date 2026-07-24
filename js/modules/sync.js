@@ -60,6 +60,8 @@ const SyncModule = (() => {
   }
 
   function simpleHash(str) {
+    // 注意：此哈希仅用于 web 前端本地标识，非加密安全用途。
+    // 实际部署时应替换为后端 bcrypt/argon2
     let hash = 0;
     for (let i = 0; i < str.length; i++) {
       const c = str.charCodeAt(i);
@@ -80,15 +82,21 @@ const SyncModule = (() => {
       const localData = State.get(k);
       const cloudKey = CLOUD_PREFIX + userId + '_' + k;
 
-      // 检查云端是否有更新的数据
+      // 逐项合并而非整键覆盖，避免丢失云端较新的单条数据
       const cloudRaw = localStorage.getItem(cloudKey);
       if (cloudRaw) {
         try {
           const cloudData = JSON.parse(cloudRaw);
-          const localTime = getLatestModifyTime(localData);
-          const cloudTime = getLatestModifyTime(cloudData);
-          // 云端更新则以云端为准
-          if (cloudTime > localTime) return;
+          // 数组类型：逐 id 比较 updatedAt，以较新者为准
+          if (Array.isArray(localData) && Array.isArray(cloudData)) {
+            const merged = mergeArrays(localData, cloudData);
+            localStorage.setItem(cloudKey, JSON.stringify(merged));
+            return;
+          }
+          // 对象类型：以 updatedAt 较新者为准
+          const localTime = (localData && localData.updatedAt) || '';
+          const cloudTime = (cloudData && cloudData.updatedAt) || '';
+          if (cloudTime > localTime) return; // 云端更新，不上传
         } catch (e) {}
       }
 
@@ -96,6 +104,23 @@ const SyncModule = (() => {
     });
 
     return { ok: true, msg: '数据已上传' };
+  }
+
+  function mergeArrays(localArr, cloudArr) {
+    const mergedMap = new Map();
+    localArr.forEach(item => { if (item && item.id) mergedMap.set(item.id, item); });
+    cloudArr.forEach(item => {
+      if (!item || !item.id) return;
+      const local = mergedMap.get(item.id);
+      if (!local) {
+        mergedMap.set(item.id, item);
+      } else {
+        const localTime = local.updatedAt || '';
+        const cloudTime = item.updatedAt || '';
+        if (cloudTime > localTime) mergedMap.set(item.id, item);
+      }
+    });
+    return [...mergedMap.values()];
   }
 
   function pullFromCloud() {
@@ -124,30 +149,20 @@ const SyncModule = (() => {
             updated++;
           }
         } else if (Array.isArray(localData)) {
-          // 数组类型：合并（云端优先，本地未同步的上传）
-          let merged = [...localData];
-          let mergedIds = new Set(localData.map(d => d.id));
-          let changed = false;
+          // 数组类型：逐 id 合并（以较新者为准）
+          const merged = mergeArrays(localData, cloudData)
+            .filter(d => !d.deleted);
 
-          cloudData.forEach(cloudItem => {
-            const localIdx = merged.findIndex(d => d.id === cloudItem.id);
-            if (localIdx === -1) {
-              merged.push(cloudItem);
-              changed = true;
-            } else {
-              const localTime = merged[localIdx].updatedAt || '';
-              const cloudTime = cloudItem.updatedAt || '';
-              if (cloudTime > localTime) {
-                merged[localIdx] = cloudItem;
-                changed = true;
-              }
-            }
+          // 检查是否有实际变化
+          const localIds = new Set(localData.map(d => d.id));
+          const mergedIds = new Set(merged.map(d => d.id));
+          const hasNew = merged.some(d => !localIds.has(d.id));
+          const hasUpdate = localData.some(d => {
+            const mc = merged.find(m => m.id === d.id);
+            return mc && (mc.updatedAt || '') > (d.updatedAt || '');
           });
 
-          // 删除标记同步
-          merged = merged.filter(d => !d.deleted);
-
-          if (changed) {
+          if (hasNew || hasUpdate) {
             State.set(k, merged);
             State.persist(k);
             updated++;
@@ -169,42 +184,33 @@ const SyncModule = (() => {
     return { ok: true, push: pushResult, pull: pullResult };
   }
 
-  function getLatestModifyTime(data) {
-    if (!data) return '';
-    if (data.updatedAt) return data.updatedAt;
-    if (Array.isArray(data)) {
-      let max = '';
-      data.forEach(d => {
-        if (d.updatedAt && d.updatedAt > max) max = d.updatedAt;
-      });
-      return max;
-    }
-    return '';
-  }
-
   // ─── 自动同步 ───
-  let autoSyncTimer = null;
+  let _syncIntervalId = null;
+  let _debounceTimerId = null;
 
   function startAutoSync(intervalMs = 30000) {
     stopAutoSync();
-    autoSyncTimer = setInterval(() => {
+    _syncIntervalId = setInterval(() => {
       if (isLoggedIn()) pushToCloud();
     }, intervalMs);
   }
 
   function stopAutoSync() {
-    if (autoSyncTimer) {
-      clearInterval(autoSyncTimer);
-      autoSyncTimer = null;
+    if (_syncIntervalId) {
+      clearInterval(_syncIntervalId);
+      _syncIntervalId = null;
+    }
+    if (_debounceTimerId) {
+      clearTimeout(_debounceTimerId);
+      _debounceTimerId = null;
     }
   }
 
-  // 监听本地数据变更，实时缓存到云端
+  // 监听本地数据变更，实时上传到云端（2 秒 debounce）
   document.addEventListener('task:changed', () => {
     if (isLoggedIn()) {
-      // 延迟上传避免频繁写入
-      clearTimeout(autoSyncTimer);
-      autoSyncTimer = setTimeout(() => pushToCloud(), 2000);
+      clearTimeout(_debounceTimerId);
+      _debounceTimerId = setTimeout(() => pushToCloud(), 2000);
     }
   });
 

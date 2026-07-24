@@ -2,6 +2,9 @@
  * 任务管理模块
  */
 const TaskModule = (() => {
+  // 底层读取（不过滤 deleted），仅用于需要修改 state 的场景
+  function _getRaw() { return State.get('tasks'); }
+  // 公开读取（过滤 deleted），用于 UI 渲染
   function getTasks() { return State.get('tasks').filter(t => !t.deleted); }
 
   function getTaskById(id) { return getTasks().find(t => t.id === id); }
@@ -33,7 +36,7 @@ const TaskModule = (() => {
       deleted: false
     };
 
-    const tasks = getTasks();
+    const tasks = _getRaw();
     tasks.push(task);
     State.set('tasks', tasks);
     State.persist('tasks');
@@ -42,7 +45,7 @@ const TaskModule = (() => {
   }
 
   function addTaskBatch(taskList) {
-    const tasks = getTasks();
+    const tasks = _getRaw();
     let added = 0;
     taskList.forEach(item => {
       if (Validate.isValidTask(item.content)) {
@@ -71,10 +74,13 @@ const TaskModule = (() => {
   }
 
   function updateTask(id, updates) {
-    const tasks = getTasks();
+    const tasks = _getRaw();
     const idx = tasks.findIndex(t => t.id === id);
     if (idx === -1) return { ok: false, msg: '任务不存在' };
-    tasks[idx] = { ...tasks[idx], ...updates, updatedAt: DateUtils.nowISO() };
+    // 防止意外覆盖 id
+    const safeUpdates = { ...updates };
+    delete safeUpdates.id;
+    tasks[idx] = { ...tasks[idx], ...safeUpdates, updatedAt: DateUtils.nowISO() };
     State.set('tasks', tasks);
     State.persist('tasks');
     document.dispatchEvent(new CustomEvent('task:changed'));
@@ -82,7 +88,7 @@ const TaskModule = (() => {
   }
 
   function deleteTask(id) {
-    const tasks = getTasks();
+    const tasks = _getRaw();
     const idx = tasks.findIndex(t => t.id === id);
     if (idx === -1) return { ok: false, msg: '任务不存在' };
     tasks[idx].deleted = true;
@@ -94,7 +100,7 @@ const TaskModule = (() => {
   }
 
   function batchDelete(ids) {
-    const tasks = getTasks();
+    const tasks = _getRaw();
     ids.forEach(id => {
       const t = tasks.find(t => t.id === id);
       if (t) { t.deleted = true; t.updatedAt = DateUtils.nowISO(); }
@@ -106,17 +112,38 @@ const TaskModule = (() => {
   }
 
   function batchComplete(ids) {
-    ids.forEach(id => updateTask(id, { status: 'completed' }));
+    const tasks = _getRaw();
+    ids.forEach(id => {
+      const t = tasks.find(t => t.id === id);
+      if (t) { t.status = 'completed'; t.updatedAt = DateUtils.nowISO(); }
+    });
+    State.set('tasks', tasks);
+    State.persist('tasks');
+    document.dispatchEvent(new CustomEvent('task:changed'));
     return { ok: true };
   }
 
   function batchMigrate(ids, targetDate) {
-    ids.forEach(id => updateTask(id, { scheduledDate: targetDate }));
+    const tasks = _getRaw();
+    ids.forEach(id => {
+      const t = tasks.find(t => t.id === id);
+      if (t) { t.scheduledDate = targetDate; t.updatedAt = DateUtils.nowISO(); }
+    });
+    State.set('tasks', tasks);
+    State.persist('tasks');
+    document.dispatchEvent(new CustomEvent('task:changed'));
     return { ok: true };
   }
 
   function batchChangeSubject(ids, subjectId) {
-    ids.forEach(id => updateTask(id, { subjectId }));
+    const tasks = _getRaw();
+    ids.forEach(id => {
+      const t = tasks.find(t => t.id === id);
+      if (t) { t.subjectId = subjectId; t.updatedAt = DateUtils.nowISO(); }
+    });
+    State.set('tasks', tasks);
+    State.persist('tasks');
+    document.dispatchEvent(new CustomEvent('task:changed'));
     return { ok: true };
   }
 
@@ -125,7 +152,7 @@ const TaskModule = (() => {
     const settings = State.get('settings');
     if (!settings.autoPostpone) return;
 
-    const tasks = getTasks();
+    const tasks = _getRaw();
     const today = dateStr || DateUtils.today();
     const restDates = RestModule.getEffectiveRestDates();
     const leaveDates = RestModule.getEffectiveLeaveDates();

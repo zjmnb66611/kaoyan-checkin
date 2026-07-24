@@ -5,6 +5,14 @@ const RestModule = (() => {
   function getRestDays() { return State.get('restDays') || []; }
   function getLeaves() { return State.get('leaves') || []; }
 
+  // 缓存失效
+  function _invalidateCaches() {
+    _restDatesCache = null;
+    _restDatesCacheKey = '';
+    _leaveDatesCache = null;
+    _leaveDatesCacheKey = '';
+  }
+
   // 周期性周休息日
   function setWeeklyRestDays(daysOfWeek, enabled = true) {
     // daysOfWeek: [0,6] 0=周日
@@ -24,6 +32,7 @@ const RestModule = (() => {
     }
     State.set('restDays', restDays);
     State.persist('restDays');
+    _invalidateCaches();
     applyRestDayPostponement();
     document.dispatchEvent(new CustomEvent('task:changed'));
     return { ok: true };
@@ -47,6 +56,7 @@ const RestModule = (() => {
     });
     State.set('restDays', restDays);
     State.persist('restDays');
+    _invalidateCaches();
     applyRestDayPostponement();
     document.dispatchEvent(new CustomEvent('task:changed'));
     return { ok: true };
@@ -57,6 +67,7 @@ const RestModule = (() => {
     restDays = restDays.filter(r => r.id !== id);
     State.set('restDays', restDays);
     State.persist('restDays');
+    _invalidateCaches();
     document.dispatchEvent(new CustomEvent('task:changed'));
     return { ok: true };
   }
@@ -65,6 +76,7 @@ const RestModule = (() => {
     const restDays = getRestDays().filter(r => r.type !== 'temporary');
     State.set('restDays', restDays);
     State.persist('restDays');
+    _invalidateCaches();
     document.dispatchEvent(new CustomEvent('task:changed'));
     return { ok: true };
   }
@@ -111,6 +123,7 @@ const RestModule = (() => {
 
     leave.isRevoked = true;
     leave.restoreMode = restoreMode;
+    _invalidateCaches();
 
     if (restoreMode === 'restore_original') {
       const tasks = TaskModule.getTasks();
@@ -132,34 +145,41 @@ const RestModule = (() => {
     return { ok: true };
   }
 
-  // 计算休息日顺延
+  // 计算休息日顺延（将请假日期上未完成任务递进到假期后的工作日）
   function postponeTasksForLeave(startDate, endDate, leaveRecord) {
     const tasks = TaskModule.getTasks();
     const restDates = getEffectiveRestDates();
     const leaveDates = getEffectiveLeaveDates();
     const allOff = new Set([...restDates, ...leaveDates]);
 
+    // 找到假期后第一个工作日起始点，后续逐日递进
+    let nextSlot = endDate;
+    for (let i = 0; i < 365; i++) {
+      nextSlot = DateUtils.addDays(nextSlot, 1);
+      if (!allOff.has(nextSlot)) break;
+    }
+
     let d = startDate;
     while (d <= endDate) {
-      const dayTasks = tasks.filter(t => t.scheduledDate === d && !t.deleted && t.status === 'pending');
+      const dayTasks = tasks.filter(t =>
+        t.scheduledDate === d && !t.deleted && t.status === 'pending'
+      );
       if (dayTasks.length > 0) {
-        // 找到假期结束后第一个工作日
-        let newDate = endDate;
-        for (let i = 0; i < 365; i++) {
-          newDate = DateUtils.addDays(newDate, 1);
-          if (!allOff.has(newDate)) break;
-        }
-        // 为每个任务分配递进日期
-        dayTasks.forEach((t, idx) => {
-          const target = DateUtils.addDays(newDate, Math.floor(idx / 20));
+        // 为不同日期分配不同的工作日，而非全部堆积到同一天
+        const target = nextSlot;
+        dayTasks.forEach((t) => {
           t.scheduledDate = target;
           t.updatedAt = DateUtils.nowISO();
-          // 更新快照
           if (leaveRecord) {
             const snap = leaveRecord.taskSnapshots.find(s => s.taskId === t.id);
             if (snap) snap.newDate = target;
           }
         });
+        // 移动到下一个工作日，供下一天使用
+        for (let i = 0; i < 365; i++) {
+          nextSlot = DateUtils.addDays(nextSlot, 1);
+          if (!allOff.has(nextSlot)) break;
+        }
       }
       d = DateUtils.addDays(d, 1);
     }
@@ -194,8 +214,15 @@ const RestModule = (() => {
     State.persist('tasks');
   }
 
-  // 获取所有有生效的休息日期（展开为具体日期列表）
+  // 获取所有有生效的休息日期（展开为具体日期列表）——带缓存
+  let _restDatesCache = null;
+  let _restDatesCacheKey = '';
+
   function getEffectiveRestDates() {
+    // 用 today 和 restDays/leaves 长度做简单缓存键，避免同一天内反复重算
+    const cacheKey = DateUtils.today() + '|' + getRestDays().filter(r => r.enabled).length + '|' + getLeaves().filter(l => !l.isRevoked).length;
+    if (_restDatesCache && _restDatesCacheKey === cacheKey) return _restDatesCache;
+
     const restDays = getRestDays().filter(r => r.enabled);
     const dates = new Set();
 
@@ -219,11 +246,19 @@ const RestModule = (() => {
       }
     });
 
-    return [...dates];
+    _restDatesCacheKey = cacheKey;
+    _restDatesCache = [...dates];
+    return _restDatesCache;
   }
 
-  // 获取所有有效的请假日期
+  // 获取所有有效的请假日期——带缓存
+  let _leaveDatesCache = null;
+  let _leaveDatesCacheKey = '';
+
   function getEffectiveLeaveDates() {
+    const cacheKey = DateUtils.today() + '|' + getLeaves().filter(l => !l.isRevoked).length;
+    if (_leaveDatesCache && _leaveDatesCacheKey === cacheKey) return _leaveDatesCache;
+
     const leaves = getLeaves().filter(l => !l.isRevoked);
     const dates = new Set();
     leaves.forEach(l => {
@@ -233,17 +268,22 @@ const RestModule = (() => {
         d = DateUtils.addDays(d, 1);
       }
     });
-    return [...dates];
+
+    _leaveDatesCacheKey = cacheKey;
+    _leaveDatesCache = [...dates];
+    return _leaveDatesCache;
   }
 
-  // 判断某日期是否为休息日或请假
+  // 判断某日期是否为休息日或请假（使用 Set O(1) 查找）
   function isRestDay(dateStr) {
-    return getEffectiveRestDates().includes(dateStr) || getEffectiveLeaveDates().includes(dateStr);
+    const restSet = new Set(getEffectiveRestDates());
+    const leaveSet = new Set(getEffectiveLeaveDates());
+    return restSet.has(dateStr) || leaveSet.has(dateStr);
   }
 
   // 判断某日期是否为请假
   function isLeaveDate(dateStr) {
-    return getEffectiveLeaveDates().includes(dateStr);
+    return (new Set(getEffectiveLeaveDates())).has(dateStr);
   }
 
   // 获取日期类型

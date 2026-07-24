@@ -117,19 +117,23 @@
     padding: 4px 2px;
     color: var(--color-text-muted);
     cursor: pointer;
-    transition: all 0.2s ease;
+    transition: transform 0.15s ease;
     border-radius: var(--radius-md);
     font-size: 10px;
     text-decoration: none;
     min-width: 0;
     flex: 1 1 auto;
     max-width: 25%;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
   }
 
-  .nav-item i { font-size: 18px; transition: transform 0.2s ease; }
+  .nav-item i { font-size: 18px; transition: transform 0.15s ease; }
   .nav-item.active { color: var(--color-primary); font-weight: 600; }
   .nav-item.active i { transform: scale(1.1); }
-  .nav-item:active { transform: scale(0.95); }
+  .nav-item:active { transform: scale(0.92); }
+  .nav-item.nav-touching { transform: scale(0.92); }
 
   /* ═══ Toast 容器 ═══ */
   #toast-container {
@@ -382,8 +386,62 @@
 <script src="js/app.js"></script>
 
 <script>
-/* ═══ 全局事件绑定（在 App.init 之后执行） ═══ */
+/* ═══ 导航栏即时点击反馈 ═══ */
+(function() {
+  const navItems = document.querySelectorAll('#main-nav .nav-item');
+  const pageContainers = document.querySelectorAll('.page-container');
 
+  // 页面级 debounce 锁，防止快速重复点击
+  let _navLocked = false;
+
+  navItems.forEach(item => {
+    // 触屏瞬时反馈
+    item.addEventListener('touchstart', function() {
+      this.classList.add('nav-touching');
+    }, { passive: true });
+
+    item.addEventListener('touchend', function() {
+      this.classList.remove('nav-touching');
+    });
+
+    // 点击立即响应
+    item.addEventListener('click', function(e) {
+      e.preventDefault();
+
+      // 如果已经在这个页面，不做任何事
+      if (this.classList.contains('active')) return;
+
+      // 防抖：600ms 内不允许再次触发
+      if (_navLocked) return;
+      _navLocked = true;
+      setTimeout(() => { _navLocked = false; }, 600);
+
+      const targetPage = this.dataset.page;
+
+      // 第1步：立即切换 active 样式，给用户即时反馈
+      navItems.forEach(el => el.classList.remove('active'));
+      this.classList.add('active');
+
+      // 第2步：立即隐藏所有页面容器
+      pageContainers.forEach(el => el.style.display = 'none');
+
+      // 第3步：延迟一帧（~16ms）更新 hash 和渲染，让浏览器先刷新 active 样式
+      requestAnimationFrame(() => {
+        // 更新 hash（不会重复触发 hashchange 因为下面已接管）
+        const oldHash = location.hash;
+        const newHash = '#/' + targetPage;
+        if (oldHash !== newHash) {
+          // 静默更新 hash 不触发事件
+          history.replaceState(null, '', newHash);
+        }
+        // 直接调用 handleRoute（App 已暴露）
+        App.handleRoute();
+      });
+    });
+  });
+})();
+
+/* ═══ 全局任务交互委托 ═══ */
 // 全局任务交互委托
 document.addEventListener('click', e => {
   // 批量选择复选框

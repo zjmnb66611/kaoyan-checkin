@@ -128,13 +128,15 @@ const RecurringModule = (() => {
   // 每日自动刷新（确保未来任务已生成）
   function dailyRefresh() {
     const rules = getRules().filter(r => r.enabled);
+    const today = DateUtils.today();
+    const endDate = DateUtils.addDays(today, 90);
+    const restDates = new Set(RestModule.getEffectiveRestDates());
+    const leaveDates = new Set(RestModule.getEffectiveLeaveDates());
+    const allOff = new Set([...restDates, ...leaveDates]);
+
     rules.forEach(rule => {
-      // 检查规则未来是否有需要生成的日期
-      const today = DateUtils.today();
-      const endDate = DateUtils.addDays(today, 90);
-      const restDates = new Set(RestModule.getEffectiveRestDates());
-      const leaveDates = new Set(RestModule.getEffectiveLeaveDates());
-      const allOff = new Set([...restDates, ...leaveDates]);
+      // 尊重规则的 startDate，不从未来日期提前生成
+      const startFrom = rule.startDate > today ? rule.startDate : today;
 
       const existingDates = new Set(
         TaskModule.getTasks()
@@ -143,7 +145,7 @@ const RecurringModule = (() => {
       );
 
       const taskList = [];
-      let d = today;
+      let d = startFrom;
       while (d <= endDate) {
         if (!allOff.has(d) && !existingDates.has(d)) {
           const dow = DateUtils.getDayOfWeek(d);

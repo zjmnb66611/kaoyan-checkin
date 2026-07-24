@@ -65,10 +65,25 @@ const State = (() => {
 
   function loadFromStorage() {
     const keys = ['tasks','subjects','restDays','leaves','recurringRules','settings','checkinStats','user'];
+    const arrayKeys = ['tasks','subjects','restDays','leaves','recurringRules'];
+    const objectKeys = ['settings','checkinStats'];
+
     keys.forEach(k => {
       const raw = localStorage.getItem('kaoyan_' + k);
       if (raw) {
-        try { _state[k] = JSON.parse(raw); } catch (e) { /* keep default */ }
+        try {
+          const parsed = JSON.parse(raw);
+          // 类型校验：避免错误形状的数据导致后续代码崩溃
+          if (arrayKeys.includes(k) && !Array.isArray(parsed)) {
+            console.warn('State: 数据形状异常，已重置 ' + k, parsed);
+            return; // 保留默认值
+          }
+          if (objectKeys.includes(k) && (typeof parsed !== 'object' || Array.isArray(parsed) || parsed === null)) {
+            console.warn('State: 数据形状异常，已重置 ' + k, parsed);
+            return;
+          }
+          _state[k] = parsed;
+        } catch (e) { /* 解析失败，保留默认值 */ }
       }
     });
   }

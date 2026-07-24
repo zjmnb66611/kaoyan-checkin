@@ -91,7 +91,7 @@ const CheckinModule = (() => {
     const validCheckedInDates = [...checkedInDates].filter(d => !allOff.has(d));
     stats.totalDays = validCheckedInDates.length;
 
-    // 计算连续打卡天数
+    // 计算连续打卡天数（休息日和请假不计入也不打断连续）
     let consecutive = 0;
     const today = DateUtils.today();
     let checkDate = today;
@@ -102,8 +102,7 @@ const CheckinModule = (() => {
 
     while (true) {
       if (allOff.has(checkDate)) {
-        // 休息日不打断连续
-        consecutive++;
+        // 休息日/请假：不打断连续，也不计入天数，直接跳过
         checkDate = DateUtils.addDays(checkDate, -1);
         continue;
       }

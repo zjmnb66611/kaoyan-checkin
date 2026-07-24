@@ -58,42 +58,37 @@ const App = (() => {
     const hash = location.hash || '#/home';
     const page = hash.replace('#/', '') || 'home';
 
-    // 更新导航 active
+    // active 样式已由导航栏 click 事件即时处理，此处仅做兜底
     document.querySelectorAll('.nav-item').forEach(el => {
-      DOM.toggleClass(el, 'active', el.dataset.page === page || (page === 'home' && el.dataset.page === 'home'));
+      el.classList.toggle('active', el.dataset.page === page);
     });
 
-    // 切换页面容器
+    // 隐掉所有页面容器
     document.querySelectorAll('.page-container').forEach(el => el.style.display = 'none');
 
-    switch (page) {
-      case 'home':
-        currentPage = 'home';
-        const homeEl = document.getElementById('page-home');
-        if (homeEl) homeEl.style.display = '';
-        renderHome();
-        break;
-      case 'calendar':
-        currentPage = 'calendar';
-        const calEl = document.getElementById('page-calendar');
-        if (calEl) calEl.style.display = '';
-        renderCalendar();
-        break;
-      case 'review':
-        currentPage = 'review';
-        const revEl = document.getElementById('page-review');
-        if (revEl) revEl.style.display = '';
-        renderReview();
-        break;
-      case 'settings':
-        currentPage = 'settings';
-        const setEl = document.getElementById('page-settings');
-        if (setEl) setEl.style.display = '';
-        renderSettings();
-        break;
-      default:
-        location.hash = '#/home';
+    // 清理批量选择
+    _clearBatchSelection();
+
+    // 先切换 currentPage，再异步渲染
+    currentPage = page;
+    const containerId = 'page-' + page;
+    const containerEl = document.getElementById(containerId);
+
+    if (containerEl) {
+      containerEl.style.display = '';
     }
+
+    // 使用 queueMicrotask 延迟渲染，让浏览器先完成 active 样式重绘
+    if (window._routeMicrotaskId) cancelAnimationFrame(window._routeMicrotaskId);
+    window._routeMicrotaskId = requestAnimationFrame(() => {
+      switch (page) {
+        case 'home': renderHome(); break;
+        case 'calendar': renderCalendar(); break;
+        case 'review': renderReview(); break;
+        case 'settings': renderSettings(); break;
+        default: location.hash = '#/home';
+      }
+    });
   }
 
   // ═══ 首页渲染 ═══
@@ -239,11 +234,22 @@ const App = (() => {
     const searchInput = document.getElementById('search-input');
     if (searchInput) {
       searchInput.addEventListener('input', e => {
-        const results = TaskModule.searchTasks(e.target.value);
+        const query = e.target.value;
         const taskList = document.getElementById('task-list');
-        if (taskList && results.length > 0) {
-          const subjects = SubjectModule.getAll();
+        if (!taskList) return;
+        const subjects = SubjectModule.getAll();
+        if (!query || !query.trim()) {
+          // 清空搜索，恢复完整列表
+          const today = DateUtils.today();
+          const todayTasks = TaskModule.getTasksByDate(today);
+          taskList.innerHTML = todayTasks.map(t => renderTaskCard(t, subjects)).join('');
+          return;
+        }
+        const results = TaskModule.searchTasks(query);
+        if (results.length > 0) {
           taskList.innerHTML = results.map(t => renderTaskCard(t, subjects)).join('');
+        } else {
+          taskList.innerHTML = '<div class="text-center py-6 text-stone-400 text-sm">未找到匹配的任务</div>';
         }
       });
     }
@@ -271,12 +277,20 @@ const App = (() => {
           onConfirm: () => {
             const rawText = document.getElementById('batch-import-text').value;
             const skipInvalid = document.getElementById('batch-skip-invalid').checked;
-            const result = importBatchTasks(rawText, skipInvalid);
-            if (result.ok) {
-              Toast.success(`成功导入 ${result.added} 个任务`);
-              if (result.skipped > 0) Toast.warning(`跳过 ${result.skipped} 条无效数据`);
-            } else {
-              Toast.error(result.msg);
+            try {
+              const result = importBatchTasks(rawText, skipInvalid);
+              if (result.ok) {
+                Toast.success(`成功导入 ${result.added} 个任务`);
+                if (result.skipped > 0) Toast.warning(`跳过 ${result.skipped} 条无效数据`);
+              } else {
+                Toast.error(result.msg);
+              }
+            } catch (e) {
+              if (e.line) {
+                Toast.error(`第${e.line}行数据格式错误：${e.reason || '请检查格式'}`);
+              } else {
+                Toast.error('导入失败，请检查数据格式');
+              }
             }
           }
         });
@@ -308,6 +322,13 @@ const App = (() => {
 
   // ─── 批量操作模式 ───
   let batchSelected = new Set();
+
+  // batchSelected 存储 key 为 taskId，在页面离开时清空
+  function _clearBatchSelection() {
+    batchSelected.clear();
+    const toolbar = document.getElementById('batch-toolbar');
+    if (toolbar) toolbar.classList.add('hidden');
+  }
 
   function bindBatchMode() {
     const batchBtn = document.getElementById('batch-mode-btn');
@@ -407,7 +428,7 @@ const App = (() => {
   function renderTaskCard(task, subjects) {
     const sub = subjects.find(s => s.id === task.subjectId);
     const subColor = sub ? sub.color : '#a8a29e';
-    const subName = sub ? sub.name : '';
+    const subName = sub ? Validate.sanitizeHTML(sub.name) : '';
     const isCompleted = task.status === 'completed';
     const settings = State.get('settings');
     const checkboxLeft = settings.taskStyle !== 'checkbox-right';
@@ -446,9 +467,12 @@ const App = (() => {
           <div class="flex-1 min-w-0">
             <div class="flex items-center gap-2 mb-0.5">
               ${subName ? `<span class="text-[10px] px-1.5 py-0.5 rounded-full text-white font-medium" style="background-color:${subColor}">${subName}</span>` : ''}
+              ${task.isCheckinBackfill ? '<span class="text-[10px] text-amber-500">补卡</span>' : ''}
             </div>
             <p class="text-sm text-stone-700 task-content ${isCompleted ? 'line-through text-stone-400' : ''}">${Validate.sanitizeHTML(task.content)}</p>
+            ${task.checkinNote ? `<p class="text-xs text-stone-400 mt-1">📝 ${Validate.sanitizeHTML(task.checkinNote)}</p>` : ''}
           </div>
+          <i class="fa fa-ellipsis-v text-stone-300 text-xs cursor-pointer task-more" data-task-id="${task.id}"></i>
           ${checkboxHTML}
         </div>`;
     }
@@ -459,6 +483,18 @@ const App = (() => {
     const el = document.getElementById('page-calendar');
     if (!el) return;
 
+    // 如果是周视图但没有实现，回退到月视图
+    if (currentCalendarView === 'week') {
+      // 周视图：显示本周的 7 天
+      const weekDays = DateUtils.getWeekDays(currentCalendarDate);
+      renderWeekCalendar(el, weekDays);
+      return;
+    }
+
+    renderMonthCalendar(el);
+  }
+
+  function renderMonthCalendar(el) {
     const [y, m] = currentCalendarDate.split('-').map(Number);
     const { days, startDow } = DateUtils.getMonthDays(y, m - 1);
     const today = DateUtils.today();
@@ -490,7 +526,7 @@ const App = (() => {
       else if (isRest) bgClass = 'bg-blue-50 hover:bg-blue-100';
       if (isToday) bgClass += ' ring-2 ring-amber-400';
 
-      const day = new Date(d).getDate();
+      const day = DateUtils.parseLocal(d).getDate();
 
       cellsHTML += `
         <div class="calendar-cell h-10 flex flex-col items-center justify-center rounded-lg cursor-pointer relative text-sm ${bgClass} transition-all" data-date="${d}">
@@ -502,6 +538,10 @@ const App = (() => {
           </div>
         </div>`;
     });
+
+    const titleLabel = currentCalendarView === 'month'
+      ? DateUtils.getFullMonthName(currentCalendarDate)
+      : `${DateUtils.getWeekRange(currentCalendarDate).start} ~ ${DateUtils.getWeekRange(currentCalendarDate).end}`;
 
     el.innerHTML = `
       <div class="px-4 pt-3">
@@ -517,7 +557,7 @@ const App = (() => {
         <!-- 月份切换 -->
         <div class="flex items-center justify-between mb-3">
           <button class="w-8 h-8 rounded-full flex items-center justify-center hover:bg-stone-100 transition-all" id="cal-prev"><i class="fa fa-chevron-left text-stone-500 text-xs"></i></button>
-          <span class="font-bold text-stone-700">${DateUtils.getFullMonthName(currentCalendarDate)}</span>
+          <span class="font-bold text-stone-700">${titleLabel}</span>
           <button class="w-8 h-8 rounded-full flex items-center justify-center hover:bg-stone-100 transition-all" id="cal-next"><i class="fa fa-chevron-right text-stone-500 text-xs"></i></button>
         </div>
 
@@ -543,48 +583,133 @@ const App = (() => {
     bindCalendarEvents();
   }
 
-  function bindCalendarEvents() {
-    document.getElementById('cal-prev').addEventListener('click', () => {
-      const d = new Date(currentCalendarDate);
-      d.setMonth(d.getMonth() - 1);
-      currentCalendarDate = DateUtils.formatDate(d);
-      renderCalendar();
-    });
+  function renderWeekCalendar(el, weekDays) {
+    const today = DateUtils.today();
+    const dayNames = ['日', '一', '二', '三', '四', '五', '六'];
+    const allTaskDates = new Set(TaskModule.getAllDatesWithTasks());
+    const restDates = new Set(RestModule.getEffectiveRestDates());
+    const leaveDates = new Set(RestModule.getEffectiveLeaveDates());
 
-    document.getElementById('cal-next').addEventListener('click', () => {
-      const d = new Date(currentCalendarDate);
-      d.setMonth(d.getMonth() + 1);
+    let cellsHTML = weekDays.map(d => {
+      const isToday = d === today;
+      const hasTask = allTaskDates.has(d);
+      const isRest = restDates.has(d);
+      const isLeave = leaveDates.has(d);
+      const tasks = TaskModule.getTasksByDate(d);
+      const allDone = tasks.length > 0 && tasks.every(t => t.status === 'completed');
+      const dayNum = DateUtils.parseLocal(d).getDate();
+
+      let bgClass = 'hover:bg-stone-50';
+      if (isLeave) bgClass = 'bg-rose-50 hover:bg-rose-100';
+      else if (isRest) bgClass = 'bg-blue-50 hover:bg-blue-100';
+      if (isToday) bgClass += ' ring-2 ring-amber-400';
+
+      return `
+        <div class="calendar-cell h-16 flex flex-col items-center justify-center rounded-lg cursor-pointer relative text-sm ${bgClass} transition-all" data-date="${d}">
+          <span class="${isToday ? 'font-black text-amber-600' : 'text-stone-700'}">${dayNum}</span>
+          <span class="text-[10px] text-stone-400">${dayNames[DateUtils.getDayOfWeek(d)]}</span>
+          <div class="flex gap-0.5 absolute bottom-1">
+            ${hasTask ? (allDone ? '<div class="w-1.5 h-1.5 rounded-full bg-emerald-400"></div>' : '<div class="w-1.5 h-1.5 rounded-full bg-amber-400"></div>') : ''}
+            ${isRest ? '<div class="w-1.5 h-1.5 rounded-full bg-blue-400"></div>' : ''}
+            ${isLeave ? '<div class="w-1.5 h-1.5 rounded-full bg-rose-400"></div>' : ''}
+          </div>
+        </div>`;
+    }).join('');
+
+    el.innerHTML = `
+      <div class="px-4 pt-3">
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="text-lg font-bold text-stone-800">📅 日历</h2>
+          <div class="flex bg-stone-100 rounded-lg p-0.5 text-sm">
+            <button class="cal-view-btn px-3 py-1 rounded-md transition-all ${currentCalendarView === 'month' ? 'bg-white shadow-sm font-medium text-stone-800' : 'text-stone-500'}" data-view="month">月</button>
+            <button class="cal-view-btn px-3 py-1 rounded-md transition-all ${currentCalendarView === 'week' ? 'bg-white shadow-sm font-medium text-stone-800' : 'text-stone-500'}" data-view="week">周</button>
+          </div>
+        </div>
+
+        <div class="flex items-center justify-between mb-3">
+          <button class="w-8 h-8 rounded-full flex items-center justify-center hover:bg-stone-100 transition-all" id="cal-prev"><i class="fa fa-chevron-left text-stone-500 text-xs"></i></button>
+          <span class="font-bold text-stone-700">${weekDays[0]} ~ ${weekDays[6]}</span>
+          <button class="w-8 h-8 rounded-full flex items-center justify-center hover:bg-stone-100 transition-all" id="cal-next"><i class="fa fa-chevron-right text-stone-500 text-xs"></i></button>
+        </div>
+
+        <div class="grid grid-cols-7 gap-1">
+          ${dayNames.map(n => `<div class="text-center text-xs font-medium text-stone-400 py-2">${n}</div>`).join('')}
+          ${cellsHTML}
+        </div>
+
+        <div class="flex flex-wrap gap-x-3 gap-y-1 mt-4 text-xs text-stone-400 justify-center">
+          <span class="flex items-center gap-1 whitespace-nowrap"><span class="w-2 h-2 rounded-full bg-amber-400 inline-block flex-shrink-0"></span>有任务</span>
+          <span class="flex items-center gap-1 whitespace-nowrap"><span class="w-2 h-2 rounded-full bg-emerald-400 inline-block flex-shrink-0"></span>已完成</span>
+          <span class="flex items-center gap-1 whitespace-nowrap"><span class="w-2 h-2 rounded-full bg-blue-400 inline-block flex-shrink-0"></span>休息日</span>
+          <span class="flex items-center gap-1 whitespace-nowrap"><span class="w-2 h-2 rounded-full bg-rose-400 inline-block flex-shrink-0"></span>请假</span>
+        </div>
+
+        <div id="cal-task-detail" class="mt-4 mb-20"></div>
+      </div>
+    `;
+
+    bindCalendarEvents();
+  }
+
+  function bindCalendarEvents() {
+    const prevBtn = document.getElementById('cal-prev');
+    const nextBtn = document.getElementById('cal-next');
+
+    if (prevBtn) prevBtn.onclick = () => {
+      const d = DateUtils.parseLocal(currentCalendarDate);
+      if (currentCalendarView === 'week') {
+        d.setDate(d.getDate() - 7);
+      } else {
+        d.setMonth(d.getMonth() - 1);
+      }
       currentCalendarDate = DateUtils.formatDate(d);
       renderCalendar();
-    });
+    };
+
+    if (nextBtn) nextBtn.onclick = () => {
+      const d = DateUtils.parseLocal(currentCalendarDate);
+      if (currentCalendarView === 'week') {
+        d.setDate(d.getDate() + 7);
+      } else {
+        d.setMonth(d.getMonth() + 1);
+      }
+      currentCalendarDate = DateUtils.formatDate(d);
+      renderCalendar();
+    };
 
     document.querySelectorAll('.cal-view-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
+      btn.onclick = () => {
         currentCalendarView = btn.dataset.view;
         renderCalendar();
+      };
+    });
+
+    // 日历单元格点击委托（使用一次性标记避免重复绑定）
+    const cal = document.getElementById('page-calendar');
+    if (cal && !cal._calBound) {
+      cal._calBound = true;
+      cal.addEventListener('click', function(e) {
+        const cell = e.target.closest('.calendar-cell');
+        if (!cell) return;
+        const date = cell.dataset.date;
+        const tasks = TaskModule.getTasksByDate(date);
+        const detail = document.getElementById('cal-task-detail');
+        if (!detail) return;
+
+        const subjects = SubjectModule.getAll();
+        if (tasks.length === 0) {
+          detail.innerHTML = `<div class="text-center py-6 text-stone-400 text-sm">${date} 无任务</div>`;
+        } else {
+          const settings = State.get('settings');
+          detail.innerHTML = `
+            <div class="text-sm font-bold text-stone-700 mb-2">📋 ${date} ${DateUtils.getDayName(date)} (${tasks.length}个任务)</div>
+            <div class="${settings.viewMode === 'compact' ? 'space-y-1' : 'space-y-2'}">
+              ${tasks.map(t => renderTaskCard(t, subjects)).join('')}
+            </div>
+          `;
+        }
       });
-    });
-
-    // 点击日期显示任务
-    DOM.delegate(document.getElementById('page-calendar'), 'click', '.calendar-cell', function() {
-      const date = this.dataset.date;
-      const tasks = TaskModule.getTasksByDate(date);
-      const detail = document.getElementById('cal-task-detail');
-      if (!detail) return;
-
-      const subjects = SubjectModule.getAll();
-      if (tasks.length === 0) {
-        detail.innerHTML = `<div class="text-center py-6 text-stone-400 text-sm">${date} 无任务</div>`;
-      } else {
-        const settings = State.get('settings');
-        detail.innerHTML = `
-          <div class="text-sm font-bold text-stone-700 mb-2">📋 ${date} ${DateUtils.getDayName(date)} (${tasks.length}个任务)</div>
-          <div class="${settings.viewMode === 'compact' ? 'space-y-1' : 'space-y-2'}">
-            ${tasks.map(t => renderTaskCard(t, subjects)).join('')}
-          </div>
-        `;
-      }
-    });
+    }
   }
 
   // ═══ 复盘页 ═══
@@ -639,7 +764,7 @@ const App = (() => {
               <div class="text-xs font-medium text-stone-600 mb-2">📝 打卡备注汇总</div>
               ${report.checkinNotes.map(n => `
                 <div class="text-xs text-stone-500 mb-1">
-                  <span class="text-stone-400">${n.date}</span> ${n.note}
+                  <span class="text-stone-400">${n.date}</span> ${Validate.sanitizeHTML(n.note)}
                 </div>
               `).join('')}
             </div>

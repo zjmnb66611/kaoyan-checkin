@@ -524,36 +524,26 @@ const App = (() => {
           bodyHTML: `
             <div class="space-y-3 text-left">
               <div>
-                <label class="text-xs text-stone-500 block mb-1">粘贴任务数据（每行一个任务）</label>
-                <textarea id="batch-import-text" rows="6" placeholder="格式：日期,科目,任务内容&#10;示例：&#10;2026-07-25,英语,背50个单词&#10;2026-07-25,政治,复习马原第一章&#10;2026-07-26,数学分析,做课后习题" class="w-full px-3 py-2 text-sm border border-stone-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-300 resize-none font-mono text-xs"></textarea>
-                <p class="text-xs text-stone-400 mt-1">支持格式：<code>日期,科目,内容</code> 或 <code>日期,内容</code>（科目可选）</p>
-              </div>
-              <div class="flex items-center gap-2">
-                <input type="checkbox" id="batch-skip-invalid" checked class="rounded">
-                <label for="batch-skip-invalid" class="text-xs text-stone-500">跳过格式错误的行</label>
+                <label class="text-xs text-stone-500 block mb-1">粘贴任务数据</label>
+                <textarea id="batch-import-text" rows="10" placeholder="随便粘贴，自动识别日期和任务：&#10;&#10;2026-07-25&#10;背50个单词&#10;做一套数学卷子&#10;&#10;2026-07-26&#10;【政治】复习马原第一章&#10;【英语】精读一篇阅读&#10;做课后习题" class="w-full px-3 py-2 text-sm border border-stone-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-300 resize-none font-mono text-xs"></textarea>
+                <p class="text-xs text-stone-400 mt-1">每段以<code>日期</code>开头，下面每行一个任务。科目用<code>【科目名】</code>标在任务前面就行了</p>
               </div>
             </div>
           `,
           confirmText: '导入',
           onConfirm: () => {
             const rawText = document.getElementById('batch-import-text').value;
-            const skipInvalid = document.getElementById('batch-skip-invalid').checked;
             try {
-              const result = importBatchTasks(rawText, skipInvalid);
+              const result = importBatchTasks(rawText);
               if (result.ok) {
-                Toast.success(`成功导入 ${result.added} 个任务`);
-                if (result.skipped > 0) Toast.warning(`跳过 ${result.skipped} 条无效数据`);
-                // 导入成功后刷新首页
+                Toast.success('成功导入 ' + result.added + ' 个任务');
+                if (result.skipped > 0) Toast.warning('跳过 ' + result.skipped + ' 条无效数据');
                 if (currentPage === 'home') renderHome();
               } else {
                 Toast.error(result.msg);
               }
             } catch (e) {
-              if (e.line) {
-                Toast.error(`第${e.line}行数据格式错误：${e.reason || '请检查格式'}`);
-              } else {
-                Toast.error('导入失败，请检查数据格式');
-              }
+              Toast.error('导入失败，请检查数据格式');
             }
           }
         });
@@ -1291,64 +1281,57 @@ const App = (() => {
 })();
 
 // ─── 批量导入解析函数 ───
-function importBatchTasks(rawText, skipInvalid) {
+function importBatchTasks(rawText) {
   if (!rawText || !rawText.trim()) return { ok: false, msg: '请输入任务数据' };
 
-  const lines = rawText.trim().split('\n').filter(l => l.trim());
   const subjects = SubjectModule.getAll();
-  const taskList = [];
-  let skipped = 0;
-
-  // 创建科目名称 → ID 的映射
   const subjectMap = {};
   subjects.forEach(s => { subjectMap[s.name] = s.id; });
 
-  lines.forEach((line, idx) => {
-    // 按逗号分隔（支持中文逗号）
-    const parts = line.split(/[,，]/);
-    if (parts.length < 2) {
-      if (!skipInvalid) throw { skipped, line: idx + 1 };
-      skipped++;
-      return;
-    }
+  const taskList = [];
+  let skipped = 0;
 
-    let date, subjectId = '', content;
+  // 按空行或换行分割，每段是"一个日期的多个任务"
+  const blocks = rawText.trim().split(/\n\s*\n/);
 
-    if (parts.length >= 3) {
-      // 格式：日期,科目,内容
-      date = parts[0].trim();
-      const subjectName = parts[1].trim();
-      content = parts.slice(2).join(',').trim();
+  blocks.forEach(block => {
+    const lines = block.trim().split('\n').filter(l => l.trim());
+    if (lines.length === 0) return;
 
-      // 查找科目
-      if (subjectName && subjectMap[subjectName]) {
-        subjectId = subjectMap[subjectName];
-      } else if (subjectName) {
-        // 尝试模糊匹配
-        const matched = subjects.find(s => s.name.includes(subjectName) || subjectName.includes(s.name));
-        if (matched) subjectId = matched.id;
+    // 第一行：提取日期（支持任意分隔符：空格、逗号、中文逗号、冒号、顿号、制表符）
+    const firstLine = lines[0].trim();
+    const dateMatch = firstLine.match(/(\d{4}[-/]\d{1,2}[-/]\d{1,2})/);
+    if (!dateMatch) { skipped += lines.length; return; }
+    const date = dateMatch[1].replace(/\//g, '-'); // 2026/07/25 → 2026-07-25
+    if (!Validate.isValidDate(date)) { skipped += lines.length; return; }
+
+    // 解析每行任务
+    lines.forEach(line => {
+      // 去掉行首的日期（如果重复出现）
+      let content = line.trim();
+      // 移除常见的序号前缀：1. 2) - 等
+      content = content.replace(/^\d+[.)、\s]+/, '');
+      // 移除日期前缀（如果有）
+      content = content.replace(/^\d{4}[-/]\d{1,2}[-/]\d{1,2}[,\s，\s]*/, '');
+
+      // 智能分离科目：如果行首有【英语】或 [政治] 或「数学分析」等括号包裹的内容
+      let subjectId = '';
+      const bracketMatch = content.match(/^[【\[「《](.+?)[】\]」》]\s*/);
+      if (bracketMatch) {
+        const subjectName = bracketMatch[1];
+        content = content.substring(bracketMatch[0].length);
+        if (subjectMap[subjectName]) {
+          subjectId = subjectMap[subjectName];
+        } else {
+          const matched = subjects.find(s => s.name.includes(subjectName) || subjectName.includes(s.name));
+          if (matched) subjectId = matched.id;
+        }
       }
-    } else {
-      // 格式：日期,内容
-      date = parts[0].trim();
-      content = parts[1].trim();
-    }
 
-    // 校验日期
-    if (!Validate.isValidDate(date)) {
-      if (!skipInvalid) throw { skipped, line: idx + 1, reason: `第${idx + 1}行日期格式无效: ${date}` };
-      skipped++;
-      return;
-    }
+      if (!content || !Validate.isValidTask(content)) { skipped++; return; }
 
-    // 校验内容
-    if (!Validate.isValidTask(content)) {
-      if (!skipInvalid) throw { skipped, line: idx + 1, reason: `第${idx + 1}行任务内容无效` };
-      skipped++;
-      return;
-    }
-
-    taskList.push({ subjectId, content, scheduledDate: date });
+      taskList.push({ subjectId, content, scheduledDate: date });
+    });
   });
 
   if (taskList.length === 0) {

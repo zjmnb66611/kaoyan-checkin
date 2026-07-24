@@ -482,10 +482,56 @@ const App = (() => {
           </div>
         </div>
       </div>
+
+      <!-- 悬浮添加按钮 -->
+      <button id="fab-add-task" class="fixed bottom-24 right-4 md:bottom-8 md:right-8 w-14 h-14 bg-amber-500 hover:bg-amber-600 text-white rounded-2xl shadow-lg flex items-center justify-center text-2xl transition-all active:scale-90 z-50" title="添加任务">
+        <i class="fa fa-plus"></i>
+      </button>
     `;
 
     // 事件绑定
     bindHomeEvents();
+
+    // 绑定悬浮添加按钮
+    const fabBtn = document.getElementById('fab-add-task');
+    if (fabBtn) {
+      fabBtn.addEventListener('click', () => {
+        const subjects = SubjectModule.getAll();
+        const today = DateUtils.today();
+        Modal.show({
+          title: '📝 添加任务',
+          bodyHTML: `
+            <div class="space-y-3 text-left">
+              <div>
+                <label class="text-xs text-stone-500 block mb-1">科目（可选）</label>
+                <select id="fab-subject" class="w-full px-3 py-2 text-sm border border-stone-200 rounded-xl">
+                  <option value="">选择科目</option>
+                  ${subjects.map(s => '<option value="' + s.id + '">' + s.name + '</option>').join('')}
+                </select>
+              </div>
+              <div>
+                <label class="text-xs text-stone-500 block mb-1">任务内容</label>
+                <textarea id="fab-content" rows="2" placeholder="今天要做什么..." class="w-full px-3 py-2 text-sm border border-stone-200 rounded-xl resize-none"></textarea>
+              </div>
+              <div>
+                <label class="text-xs text-stone-500 block mb-1">日期</label>
+                <input type="date" id="fab-date" value="${today}" class="w-full px-3 py-2 text-sm border border-stone-200 rounded-xl">
+              </div>
+            </div>
+          `,
+          confirmText: '添加',
+          onConfirm: () => {
+            const subjectId = document.getElementById('fab-subject').value;
+            const content = document.getElementById('fab-content').value;
+            const date = document.getElementById('fab-date').value;
+            if (!content.trim()) { Toast.error('请输入任务内容'); return; }
+            const result = TaskModule.addTask({ subjectId, content: content.trim(), scheduledDate: date });
+            if (result.ok) { Toast.success('任务已添加'); renderHome(); }
+            else { Toast.error(result.msg); }
+          }
+        });
+      });
+    }
   }
 
   function bindHomeEvents() {
@@ -1076,9 +1122,9 @@ const App = (() => {
         <!-- 任务顺延规则 -->
         <div class="bg-white rounded-2xl border border-stone-100 p-4 shadow-sm">
           <h3 class="font-bold text-stone-800 text-sm mb-3">🔄 任务顺延规则</h3>
-          <label class="flex items-center justify-between cursor-pointer">
+          <label class="flex items-center justify-between cursor-pointer" onclick="var cb=document.getElementById('auto-postpone');cb.checked=!cb.checked;cb.dispatchEvent(new Event('change',{bubbles:true}));">
             <span class="text-sm text-stone-600">未完成任务自动顺延至次日</span>
-            <div class="relative cursor-pointer" onclick="var cb=document.getElementById('auto-postpone');cb.checked=!cb.checked;cb.dispatchEvent(new Event('change',{bubbles:true}));">
+            <div class="relative pointer-events-none">
               <input type="checkbox" id="auto-postpone" style="position:absolute;opacity:0;pointer-events:none;width:0;height:0" ${settings.autoPostpone ? 'checked' : ''}>
               <div class="toggle-bg w-11 h-6 rounded-full transition-all ${settings.autoPostpone ? 'bg-amber-400' : 'bg-stone-300'}"></div>
               <div class="toggle-dot absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-all ${settings.autoPostpone ? 'translate-x-5' : ''}"></div>
@@ -1298,12 +1344,47 @@ function importBatchTasks(rawText) {
     const lines = block.trim().split('\n').filter(l => l.trim());
     if (lines.length === 0) return;
 
-    // 第一行：提取日期（支持任意分隔符：空格、逗号、中文逗号、冒号、顿号、制表符）
+    // 第一行：提取日期（支持任意格式：2026-07-25、20260725、0725、7.25、7/25 等）
     const firstLine = lines[0].trim();
-    const dateMatch = firstLine.match(/(\d{4}[-/]\d{1,2}[-/]\d{1,2})/);
-    if (!dateMatch) { skipped += lines.length; return; }
-    const date = dateMatch[1].replace(/\//g, '-'); // 2026/07/25 → 2026-07-25
-    if (!Validate.isValidDate(date)) { skipped += lines.length; return; }
+    let date = null;
+
+    // 尝试从行首提取日期
+    const dateStr = firstLine.replace(/[.。、\s]/g, '-').replace(/[\/]/g, '-');
+
+    // 匹配各种日期格式
+    let match = dateStr.match(/(\d{4})[-/]?(\d{1,2})[-/]?(\d{1,2})/);
+    if (!match) {
+      // 试试只有月日的格式：如 0725, 7-25
+      match = dateStr.match(/^(\d{1,2})[-/]?(\d{1,2})$/);
+      if (match) {
+        const now = new Date();
+        const year = now.getFullYear();
+        const month = parseInt(match[1]);
+        const day = parseInt(match[2]);
+        if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+          date = year + '-' + String(month).padStart(2, '0') + '-' + String(day).padStart(2, '0');
+        }
+      } else {
+        // 试试纯数字：如 0829, 20260725
+        match = dateStr.match(/^(\d{4})(\d{2})(\d{2})$/);
+        if (!match) match = dateStr.match(/^(\d{2})(\d{2})$/);
+        if (match) {
+          const groups = match.slice(1).filter(Boolean);
+          if (groups.length === 2) {
+            const m2 = parseInt(groups[0]), d2 = parseInt(groups[1]);
+            if (m2 >= 1 && m2 <= 12 && d2 >= 1 && d2 <= 31) {
+              date = new Date().getFullYear() + '-' + String(m2).padStart(2, '0') + '-' + String(d2).padStart(2, '0');
+            }
+          } else if (groups.length === 3) {
+            date = groups[0] + '-' + String(parseInt(groups[1])).padStart(2, '0') + '-' + String(parseInt(groups[2])).padStart(2, '0');
+          }
+        }
+      }
+    } else {
+      date = match[1] + '-' + String(parseInt(match[2])).padStart(2, '0') + '-' + String(parseInt(match[3])).padStart(2, '0');
+    }
+
+    if (!date || !Validate.isValidDate(date)) { skipped += lines.length; return; }
 
     // 解析每行任务
     lines.forEach(line => {

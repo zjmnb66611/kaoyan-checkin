@@ -1102,8 +1102,8 @@ const App = (() => {
           <h3 class="font-bold text-stone-800 text-sm mb-3">🔄 任务顺延规则</h3>
           <label class="flex items-center justify-between cursor-pointer">
             <span class="text-sm text-stone-600">未完成任务自动顺延至次日</span>
-            <div class="relative">
-              <input type="checkbox" class="sr-only toggle-input" id="auto-postpone" ${settings.autoPostpone ? 'checked' : ''}>
+            <div class="relative cursor-pointer" onclick="var cb=document.getElementById('auto-postpone');cb.checked=!cb.checked;cb.dispatchEvent(new Event('change',{bubbles:true}));">
+              <input type="checkbox" id="auto-postpone" style="position:absolute;opacity:0;pointer-events:none;width:0;height:0" ${settings.autoPostpone ? 'checked' : ''}>
               <div class="toggle-bg w-11 h-6 rounded-full transition-all ${settings.autoPostpone ? 'bg-amber-400' : 'bg-stone-300'}"></div>
               <div class="toggle-dot absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-all ${settings.autoPostpone ? 'translate-x-5' : ''}"></div>
             </div>

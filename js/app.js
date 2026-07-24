@@ -160,7 +160,7 @@ const App = (() => {
         </div>
       </div>
 
-      <!-- 今日任务列表 -->
+	      <!-- 今日任务列表 -->
       <div class="px-4 mt-3">
         <div class="flex items-center justify-between mb-3">
           <h2 class="text-lg font-bold text-stone-800">
@@ -168,6 +168,9 @@ const App = (() => {
             <span class="text-sm text-stone-400 font-normal ml-2">${DateUtils.getDayName(today)}</span>
           </h2>
           <div class="flex items-center gap-2">
+            <button id="batch-import-btn" class="text-xs text-amber-600 font-medium hover:text-amber-700 transition-all active:scale-95 flex items-center gap-1">
+              <i class="fa fa-upload"></i> 批量导入
+            </button>
             <span class="text-xs text-stone-400">${completedCount}/${todayTasks.length}</span>
             <span class="text-xs font-bold text-amber-600">${completionRate}%</span>
           </div>
@@ -222,6 +225,41 @@ const App = (() => {
           const subjects = SubjectModule.getAll();
           taskList.innerHTML = results.map(t => renderTaskCard(t, subjects)).join('');
         }
+      });
+    }
+
+    // 批量导入
+    const batchImportBtn = document.getElementById('batch-import-btn');
+    if (batchImportBtn) {
+      batchImportBtn.addEventListener('click', () => {
+        Modal.show({
+          title: '📥 批量导入任务',
+          bodyHTML: `
+            <div class="space-y-3 text-left">
+              <div>
+                <label class="text-xs text-stone-500 block mb-1">粘贴任务数据（每行一个任务）</label>
+                <textarea id="batch-import-text" rows="6" placeholder="格式：日期,科目,任务内容&#10;示例：&#10;2026-07-25,英语,背50个单词&#10;2026-07-25,政治,复习马原第一章&#10;2026-07-26,数学分析,做课后习题" class="w-full px-3 py-2 text-sm border border-stone-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-300 resize-none font-mono text-xs"></textarea>
+                <p class="text-xs text-stone-400 mt-1">支持格式：<code>日期,科目,内容</code> 或 <code>日期,内容</code>（科目可选）</p>
+              </div>
+              <div class="flex items-center gap-2">
+                <input type="checkbox" id="batch-skip-invalid" checked class="rounded">
+                <label for="batch-skip-invalid" class="text-xs text-stone-500">跳过格式错误的行</label>
+              </div>
+            </div>
+          `,
+          confirmText: '导入',
+          onConfirm: () => {
+            const rawText = document.getElementById('batch-import-text').value;
+            const skipInvalid = document.getElementById('batch-skip-invalid').checked;
+            const result = importBatchTasks(rawText, skipInvalid);
+            if (result.ok) {
+              Toast.success(`成功导入 ${result.added} 个任务`);
+              if (result.skipped > 0) Toast.warning(`跳过 ${result.skipped} 条无效数据`);
+            } else {
+              Toast.error(result.msg);
+            }
+          }
+        });
       });
     }
 
@@ -813,6 +851,76 @@ const App = (() => {
 
   return { init, handleRoute, renderHome, renderCalendar, renderReview, renderSettings };
 })();
+
+// ─── 批量导入解析函数 ───
+function importBatchTasks(rawText, skipInvalid) {
+  if (!rawText || !rawText.trim()) return { ok: false, msg: '请输入任务数据' };
+
+  const lines = rawText.trim().split('\n').filter(l => l.trim());
+  const subjects = SubjectModule.getAll();
+  const taskList = [];
+  let skipped = 0;
+
+  // 创建科目名称 → ID 的映射
+  const subjectMap = {};
+  subjects.forEach(s => { subjectMap[s.name] = s.id; });
+
+  lines.forEach((line, idx) => {
+    // 按逗号分隔（支持中文逗号）
+    const parts = line.split(/[,，]/);
+    if (parts.length < 2) {
+      if (!skipInvalid) throw { skipped, line: idx + 1 };
+      skipped++;
+      return;
+    }
+
+    let date, subjectId = '', content;
+
+    if (parts.length >= 3) {
+      // 格式：日期,科目,内容
+      date = parts[0].trim();
+      const subjectName = parts[1].trim();
+      content = parts.slice(2).join(',').trim();
+
+      // 查找科目
+      if (subjectName && subjectMap[subjectName]) {
+        subjectId = subjectMap[subjectName];
+      } else if (subjectName) {
+        // 尝试模糊匹配
+        const matched = subjects.find(s => s.name.includes(subjectName) || subjectName.includes(s.name));
+        if (matched) subjectId = matched.id;
+      }
+    } else {
+      // 格式：日期,内容
+      date = parts[0].trim();
+      content = parts[1].trim();
+    }
+
+    // 校验日期
+    if (!Validate.isValidDate(date)) {
+      if (!skipInvalid) throw { skipped, line: idx + 1, reason: `第${idx + 1}行日期格式无效: ${date}` };
+      skipped++;
+      return;
+    }
+
+    // 校验内容
+    if (!Validate.isValidTask(content)) {
+      if (!skipInvalid) throw { skipped, line: idx + 1, reason: `第${idx + 1}行任务内容无效` };
+      skipped++;
+      return;
+    }
+
+    taskList.push({ subjectId, content, scheduledDate: date });
+  });
+
+  if (taskList.length === 0) {
+    return { ok: false, msg: '没有可导入的有效数据' };
+  }
+
+  const result = TaskModule.addTaskBatch(taskList);
+  result.skipped = skipped;
+  return result;
+}
 
 // ─── 启动 ───
 document.addEventListener('DOMContentLoaded', () => App.init());

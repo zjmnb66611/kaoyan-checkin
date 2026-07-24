@@ -362,11 +362,11 @@ const App = (() => {
         </div>
 
         <!-- 图例 -->
-        <div class="flex gap-4 mt-4 text-xs text-stone-400 justify-center">
-          <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-amber-400 inline-block"></span>有任务</span>
-          <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-emerald-400 inline-block"></span>已完成</span>
-          <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-blue-400 inline-block"></span>休息日</span>
-          <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-rose-400 inline-block"></span>请假</span>
+        <div class="flex flex-wrap gap-x-3 gap-y-1 mt-4 text-xs text-stone-400 justify-center">
+          <span class="flex items-center gap-1 whitespace-nowrap"><span class="w-2 h-2 rounded-full bg-amber-400 inline-block flex-shrink-0"></span>有任务</span>
+          <span class="flex items-center gap-1 whitespace-nowrap"><span class="w-2 h-2 rounded-full bg-emerald-400 inline-block flex-shrink-0"></span>已完成</span>
+          <span class="flex items-center gap-1 whitespace-nowrap"><span class="w-2 h-2 rounded-full bg-blue-400 inline-block flex-shrink-0"></span>休息日</span>
+          <span class="flex items-center gap-1 whitespace-nowrap"><span class="w-2 h-2 rounded-full bg-rose-400 inline-block flex-shrink-0"></span>请假</span>
         </div>
 
         <!-- 选中日期的任务列表 -->
@@ -454,7 +454,7 @@ const App = (() => {
           <div class="text-xs font-medium text-stone-600 mb-2">各科完成情况</div>
           ${report.subjectProgress.filter(sp => sp.total > 0).map(sp => `
             <div class="flex items-center gap-2 mb-2">
-              <span class="text-xs text-stone-500 w-16 truncate">${sp.name}</span>
+              <span class="text-xs text-stone-500 review-subject-label truncate">${sp.name}</span>
               <div class="flex-1 bg-stone-100 rounded-full h-1.5">
                 <div class="h-1.5 rounded-full" style="width:${sp.rate}%;background-color:${sp.color}"></div>
               </div>
@@ -513,10 +513,10 @@ const App = (() => {
           <h3 class="font-bold text-stone-800 text-sm mb-3">📚 科目管理</h3>
           <div id="subject-list" class="space-y-2 mb-3">
             ${subjects.map(s => `
-              <div class="flex items-center gap-2 text-sm" data-subject-id="${s.id}">
-                <span class="w-3 h-3 rounded-full" style="background-color:${s.color}"></span>
-                <span class="flex-1 text-stone-700">${s.name}</span>
-                ${s.isPreset ? '<span class="text-[10px] text-stone-400">预置</span>' : `<button class="text-xs text-orange-400 hover:text-orange-600 delete-subject" data-id="${s.id}">删除</button>`}
+              <div class="flex items-center gap-2 text-sm py-1" data-subject-id="${s.id}">
+                <span class="w-3 h-3 rounded-full flex-shrink-0" style="background-color:${s.color}"></span>
+                <span class="flex-1 text-stone-700 truncate">${s.name}</span>
+                ${s.isPreset ? '<span class="text-[10px] text-stone-400 flex-shrink-0">预置</span>' : `<button class="text-xs text-orange-400 hover:text-orange-600 flex-shrink-0 delete-subject" data-id="${s.id}">删除</button>`}
               </div>
             `).join('')}
           </div>
@@ -542,9 +542,9 @@ const App = (() => {
         <!-- 周期休息日 -->
         <div class="bg-white rounded-2xl border border-stone-100 p-4 shadow-sm">
           <h3 class="font-bold text-stone-800 text-sm mb-3">🏖️ 周期休息日</h3>
-          <div class="flex flex-wrap gap-2" id="weekly-rest-selector">
+          <div class="flex flex-wrap gap-1.5" id="weekly-rest-selector">
             ${dayNames.map((name, idx) => `
-              <button class="weekly-rest-btn px-3 py-1.5 rounded-full text-xs border transition-all ${weeklyRest.includes(idx) ? 'bg-blue-100 border-blue-300 text-blue-700' : 'border-stone-200 text-stone-500'}" data-day="${idx}">${name}</button>
+              <button class="weekly-rest-btn px-2 py-1.5 rounded-full text-xs border transition-all ${weeklyRest.includes(idx) ? 'bg-blue-100 border-blue-300 text-blue-700' : 'border-stone-200 text-stone-500'}" data-day="${idx}">${name}</button>
             `).join('')}
           </div>
         </div>

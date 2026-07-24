@@ -101,21 +101,11 @@ const DateUtils = {
 
   // 生成 UUID v4（使用 crypto.getRandomValues 获取密码学随机数）
   uuid() {
-    const template = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx';
-    if (crypto && crypto.getRandomValues) {
-      const arr = new Uint8Array(16);
-      crypto.getRandomValues(arr);
-      arr[6] = (arr[6] & 0x0f) | 0x40;
-      arr[8] = (arr[8] & 0x3f) | 0x80;
-      return template.replace(/[xy]/g, (c, i) => {
-        const r = arr[i < 8 ? i : i - 4];
-        return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
-      });
-    }
-    // 回退：Math.random()（兼容旧浏览器）
-    return template.replace(/[xy]/g, c => {
+    // 使用 Math.random() 方案 — 兼容性最好，所有环境可运行
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
       const r = Math.random() * 16 | 0;
-      return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+      const v = c === 'x' ? r : (r & 0x3 | 0x8);
+      return v.toString(16);
     });
   },
 

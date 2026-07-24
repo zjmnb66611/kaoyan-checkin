@@ -11,8 +11,14 @@ const App = (() => {
     // 检查是否需要顺延昨日未完成任务
     TaskModule.postponeUncompletedTasks(DateUtils.addDays(DateUtils.today(), -1));
 
+    // 刷新周期性任务
+    RecurringModule.dailyRefresh();
+
     // 更新打卡统计
     CheckinModule.updateCheckinStats();
+
+    // 启动云端自动同步
+    SyncModule.startAutoSync();
 
     // 路由监听
     window.addEventListener('hashchange', handleRoute);
@@ -168,12 +174,26 @@ const App = (() => {
             <span class="text-sm text-stone-400 font-normal ml-2">${DateUtils.getDayName(today)}</span>
           </h2>
           <div class="flex items-center gap-2">
+            <button id="batch-mode-btn" class="text-xs text-stone-500 font-medium hover:text-amber-600 transition-all active:scale-95 flex items-center gap-1">
+              <i class="fa fa-check-square-o"></i> 批量
+            </button>
             <button id="batch-import-btn" class="text-xs text-amber-600 font-medium hover:text-amber-700 transition-all active:scale-95 flex items-center gap-1">
-              <i class="fa fa-upload"></i> 批量导入
+              <i class="fa fa-upload"></i> 导入
             </button>
             <span class="text-xs text-stone-400">${completedCount}/${todayTasks.length}</span>
             <span class="text-xs font-bold text-amber-600">${completionRate}%</span>
           </div>
+        </div>
+
+        <!-- 批量操作工具栏（默认隐藏） -->
+        <div id="batch-toolbar" class="hidden flex items-center gap-2 mb-2 px-3 py-2 bg-amber-50 rounded-xl border border-amber-200 text-xs">
+          <span id="batch-count" class="font-bold text-amber-700">已选 0 项</span>
+          <div class="flex-1"></div>
+          <button id="batch-complete" class="px-2 py-1 rounded-lg bg-emerald-100 text-emerald-700 hover:bg-emerald-200 transition-all">完成</button>
+          <button id="batch-migrate" class="px-2 py-1 rounded-lg bg-blue-100 text-blue-700 hover:bg-blue-200 transition-all">迁移</button>
+          <button id="batch-subject" class="px-2 py-1 rounded-lg bg-purple-100 text-purple-700 hover:bg-purple-200 transition-all">改科目</button>
+          <button id="batch-delete" class="px-2 py-1 rounded-lg bg-red-100 text-red-500 hover:bg-red-200 transition-all">删除</button>
+          <button id="batch-cancel" class="px-2 py-1 rounded-lg bg-stone-200 text-stone-600 hover:bg-stone-300 transition-all">取消</button>
         </div>
 
         ${todayTasks.length === 0
@@ -281,6 +301,107 @@ const App = (() => {
         renderHome();
       });
     }
+
+    // 批量操作模式
+    bindBatchMode();
+  }
+
+  // ─── 批量操作模式 ───
+  let batchSelected = new Set();
+
+  function bindBatchMode() {
+    const batchBtn = document.getElementById('batch-mode-btn');
+    const toolbar = document.getElementById('batch-toolbar');
+    const countEl = document.getElementById('batch-count');
+
+    if (!batchBtn) return;
+
+    function updateCount() {
+      if (countEl) countEl.textContent = `已选 ${batchSelected.size} 项`;
+    }
+
+    function exitBatchMode() {
+      batchSelected.clear();
+      if (toolbar) toolbar.classList.add('hidden');
+      document.querySelectorAll('.batch-check').forEach(el => el.classList.add('hidden'));
+      // 移除选中高亮
+      document.querySelectorAll('.task-card').forEach(el => el.classList.remove('ring-2', 'ring-amber-300'));
+    }
+
+    // 进入/退出批量模式
+    batchBtn.addEventListener('click', () => {
+      const isActive = toolbar && !toolbar.classList.contains('hidden');
+      if (isActive) {
+        exitBatchMode();
+      } else {
+        if (toolbar) toolbar.classList.remove('hidden');
+        document.querySelectorAll('.batch-check').forEach(el => el.classList.remove('hidden'));
+        batchSelected.clear();
+        updateCount();
+      }
+    });
+
+    // 取消
+    const cancelBtn = document.getElementById('batch-cancel');
+    if (cancelBtn) cancelBtn.addEventListener('click', exitBatchMode);
+
+    // 任务卡片上的 checkbox 改用批量选择模式
+    // 通过委托在全局 click 中处理
+
+    // 批量完成
+    const completeBtn = document.getElementById('batch-complete');
+    if (completeBtn) completeBtn.addEventListener('click', () => {
+      if (batchSelected.size === 0) { Toast.warning('请先选择任务'); return; }
+      TaskModule.batchComplete([...batchSelected]);
+      Toast.success(`已标记完成 ${batchSelected.size} 个任务`);
+      exitBatchMode();
+    });
+
+    // 批量迁移
+    const migrateBtn = document.getElementById('batch-migrate');
+    if (migrateBtn) migrateBtn.addEventListener('click', () => {
+      if (batchSelected.size === 0) { Toast.warning('请先选择任务'); return; }
+      const targetDate = prompt('目标日期 (YYYY-MM-DD)：', DateUtils.today());
+      if (!targetDate || !Validate.isValidDate(targetDate)) return;
+      TaskModule.batchMigrate([...batchSelected], targetDate);
+      Toast.success(`已迁移 ${batchSelected.size} 个任务至 ${targetDate}`);
+      exitBatchMode();
+    });
+
+    // 批量改科目
+    const subjectBtn = document.getElementById('batch-subject');
+    if (subjectBtn) subjectBtn.addEventListener('click', () => {
+      if (batchSelected.size === 0) { Toast.warning('请先选择任务'); return; }
+      const subjects = SubjectModule.getAll();
+      const options = subjects.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
+      Modal.show({
+        title: '📚 批量修改科目',
+        bodyHTML: `<select id="batch-subject-select" class="w-full px-3 py-2 text-sm border border-stone-200 rounded-xl">${options}</select>`,
+        confirmText: '修改',
+        onConfirm: () => {
+          const subjectId = document.getElementById('batch-subject-select').value;
+          TaskModule.batchChangeSubject([...batchSelected], subjectId);
+          Toast.success(`已修改 ${batchSelected.size} 个任务科目`);
+          exitBatchMode();
+        }
+      });
+    });
+
+    // 批量删除
+    const deleteBtn = document.getElementById('batch-delete');
+    if (deleteBtn) deleteBtn.addEventListener('click', () => {
+      if (batchSelected.size === 0) { Toast.warning('请先选择任务'); return; }
+      Modal.confirm({
+        title: '⚠️ 批量删除',
+        body: `确认删除 ${batchSelected.size} 个任务？此操作不可撤销。`,
+        confirmText: '确认删除',
+        onConfirm: () => {
+          TaskModule.batchDelete([...batchSelected]);
+          Toast.success(`已删除 ${batchSelected.size} 个任务`);
+          exitBatchMode();
+        }
+      });
+    });
   }
 
   function renderTaskCard(task, subjects) {
@@ -290,6 +411,11 @@ const App = (() => {
     const isCompleted = task.status === 'completed';
     const settings = State.get('settings');
     const checkboxLeft = settings.taskStyle !== 'checkbox-right';
+
+    // 批量选择复选框
+    const batchCheckHTML = `<div class="batch-check hidden flex-shrink-0 w-4 h-4 rounded border-2 flex items-center justify-center cursor-pointer transition-all duration-150 border-stone-300 hover:border-amber-400" data-task-id="${task.id}">
+      <i class="fa fa-check text-[8px] text-amber-500 hidden"></i>
+    </div>`;
 
     const checkboxHTML = `<div class="task-checkbox flex-shrink-0 w-5 h-5 rounded-full border-2 flex items-center justify-center cursor-pointer transition-all duration-200 ${isCompleted ? 'bg-emerald-400 border-emerald-400' : 'border-stone-300 hover:border-amber-400'}" data-task-id="${task.id}">
       ${isCompleted ? '<i class="fa fa-check text-white text-xs"></i>' : ''}
@@ -301,6 +427,7 @@ const App = (() => {
     if (checkboxLeft) {
       return `
         <div class="${cardClass}" data-task-id="${task.id}">
+          ${batchCheckHTML}
           ${checkboxHTML}
           <div class="flex-1 min-w-0">
             <div class="flex items-center gap-2 mb-0.5">
@@ -315,6 +442,7 @@ const App = (() => {
     } else {
       return `
         <div class="${cardClass}" data-task-id="${task.id}">
+          ${batchCheckHTML}
           <div class="flex-1 min-w-0">
             <div class="flex items-center gap-2 mb-0.5">
               ${subName ? `<span class="text-[10px] px-1.5 py-0.5 rounded-full text-white font-medium" style="background-color:${subColor}">${subName}</span>` : ''}
@@ -549,9 +677,10 @@ const App = (() => {
         <!-- 科目管理 -->
         <div class="bg-white rounded-2xl border border-stone-100 p-4 shadow-sm">
           <h3 class="font-bold text-stone-800 text-sm mb-3">📚 科目管理</h3>
-          <div id="subject-list" class="space-y-2 mb-3">
+          <div id="subject-list" class="space-y-1 mb-3">
             ${subjects.map(s => `
-              <div class="flex items-center gap-2 text-sm py-1" data-subject-id="${s.id}">
+              <div class="flex items-center gap-2 text-sm py-1.5 px-1 rounded-lg cursor-move hover:bg-stone-50 transition-all subject-drag-item" data-subject-id="${s.id}" draggable="true">
+                <span class="cursor-grab text-stone-300"><i class="fa fa-bars text-xs"></i></span>
                 <span class="w-3 h-3 rounded-full flex-shrink-0" style="background-color:${s.color}"></span>
                 <span class="flex-1 text-stone-700 truncate">${s.name}</span>
                 ${s.isPreset ? '<span class="text-[10px] text-stone-400 flex-shrink-0">预置</span>' : `<button class="text-xs text-orange-400 hover:text-orange-600 flex-shrink-0 delete-subject" data-id="${s.id}">删除</button>`}
@@ -653,6 +782,59 @@ const App = (() => {
           </div>
         </div>
 
+        <!-- 周期性重复任务 -->
+        <div class="bg-white rounded-2xl border border-stone-100 p-4 shadow-sm">
+          <h3 class="font-bold text-stone-800 text-sm mb-3">🔁 周期性重复任务</h3>
+          <div id="recurring-list" class="space-y-1 mb-3">
+            ${RecurringModule.getRules().length === 0 ? '<p class="text-xs text-stone-400">暂无重复任务</p>' : RecurringModule.getRules().map(r => {
+              const sub = SubjectModule.getAll().find(s => s.id === r.subjectId);
+              const typeLabel = r.ruleType === 'daily' ? '每日' : '每周' + r.weekDays.map(d => dayNames[d]).join('、');
+              return `
+                <div class="flex items-center justify-between text-sm py-1.5 px-1 rounded-lg hover:bg-stone-50">
+                  <div class="flex-1 min-w-0">
+                    <span class="text-stone-700 truncate block">${r.content}</span>
+                    <span class="text-[10px] text-stone-400">${typeLabel}${sub ? ' · ' + sub.name : ''} ${r.enabled ? '' : '(已暂停)'}</span>
+                  </div>
+                  <div class="flex gap-1 flex-shrink-0">
+                    <button class="text-xs px-2 py-1 rounded-lg ${r.enabled ? 'bg-stone-100 text-stone-500' : 'bg-emerald-100 text-emerald-600'} toggle-recurring" data-id="${r.id}">${r.enabled ? '暂停' : '启用'}</button>
+                    <button class="text-xs px-2 py-1 rounded-lg bg-red-50 text-red-400 delete-recurring" data-id="${r.id}">删除</button>
+                  </div>
+                </div>
+              `;
+            }).join('')}
+          </div>
+          <div class="flex gap-2">
+            <button id="add-recurring-btn" class="text-xs text-amber-600 font-medium hover:text-amber-700 transition-all">+ 新建重复任务</button>
+          </div>
+        </div>
+
+        <!-- 云端同步 -->
+        <div class="bg-white rounded-2xl border border-stone-100 p-4 shadow-sm">
+          <h3 class="font-bold text-stone-800 text-sm mb-3">☁️ 云端同步</h3>
+          ${SyncModule.isLoggedIn()
+            ? `<div class="space-y-2">
+                <div class="flex items-center gap-2 text-sm">
+                  <span class="w-8 h-8 rounded-full bg-amber-100 flex items-center justify-center text-amber-600 font-bold">${SyncModule.getCurrentUser().username.charAt(0).toUpperCase()}</span>
+                  <span class="text-stone-700 font-medium">${SyncModule.getCurrentUser().username}</span>
+                  <span class="text-[10px] text-emerald-500 bg-emerald-50 px-1.5 py-0.5 rounded-full">已登录</span>
+                </div>
+                <div class="flex gap-2">
+                  <button id="sync-now-btn" class="text-xs px-3 py-1.5 bg-amber-100 text-amber-700 rounded-lg hover:bg-amber-200 transition-all">🔄 立即同步</button>
+                  <button id="logout-btn" class="text-xs px-3 py-1.5 bg-stone-100 text-stone-500 rounded-lg hover:bg-stone-200 transition-all">退出登录</button>
+                </div>
+              </div>`
+            : `<div class="space-y-2">
+                <p class="text-xs text-stone-400 mb-2">登录后可将数据同步到云端，支持多设备访问</p>
+                <div class="flex gap-2">
+                  <input type="text" id="sync-username" placeholder="用户名" class="flex-1 px-3 py-2 text-sm border border-stone-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-300">
+                  <input type="password" id="sync-password" placeholder="密码" class="flex-1 px-3 py-2 text-sm border border-stone-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-300">
+                </div>
+                <p class="text-[10px] text-stone-400">首次输入即自动注册，之后用相同账号登录即可</p>
+                <button id="login-btn" class="w-full py-2 bg-amber-500 text-white text-sm rounded-xl hover:bg-amber-600 transition-all active:scale-95">登录 / 注册</button>
+              </div>`
+          }
+        </div>
+
         <!-- 重置 -->
         <div class="bg-white rounded-2xl border border-red-100 p-4 shadow-sm">
           <button id="reset-all-btn" class="w-full py-2.5 bg-red-50 text-red-500 rounded-xl text-sm font-medium hover:bg-red-100 transition-all active:scale-95">
@@ -694,6 +876,9 @@ const App = (() => {
         });
       });
     });
+
+    // 科目拖拽排序
+    bindSubjectDrag();
 
     // 自动顺延开关
     const postponeToggle = document.getElementById('auto-postpone');
@@ -847,6 +1032,200 @@ const App = (() => {
         });
       });
     }
+
+    // ─── 周期性任务事件 ───
+    const addRecurringBtn = document.getElementById('add-recurring-btn');
+    if (addRecurringBtn) {
+      addRecurringBtn.addEventListener('click', () => {
+        const subjects = SubjectModule.getAll();
+        const dayNames = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+        Modal.show({
+          title: '🔁 新建重复任务',
+          bodyHTML: `
+            <div class="space-y-3 text-left">
+              <div>
+                <label class="text-xs text-stone-500 block mb-1">科目（可选）</label>
+                <select id="recurring-subject" class="w-full px-3 py-2 text-sm border border-stone-200 rounded-xl">
+                  <option value="">选择科目</option>
+                  ${subjects.map(s => `<option value="${s.id}">${s.name}</option>`).join('')}
+                </select>
+              </div>
+              <div>
+                <label class="text-xs text-stone-500 block mb-1">重复类型</label>
+                <select id="recurring-type" class="w-full px-3 py-2 text-sm border border-stone-200 rounded-xl">
+                  <option value="daily">每日重复</option>
+                  <option value="weekly">每周固定日期</option>
+                </select>
+              </div>
+              <div id="recurring-weekdays" class="hidden flex flex-wrap gap-1.5">
+                ${dayNames.map((name, idx) => `
+                  <button class="recurring-day-btn px-2 py-1 rounded-full text-xs border border-stone-200 text-stone-500 hover:border-amber-300 transition-all" data-day="${idx}">${name}</button>
+                `).join('')}
+              </div>
+              <div>
+                <label class="text-xs text-stone-500 block mb-1">开始日期</label>
+                <input type="date" id="recurring-start-date" value="${DateUtils.today()}" class="w-full px-3 py-2 text-sm border border-stone-200 rounded-xl">
+              </div>
+              <div>
+                <label class="text-xs text-stone-500 block mb-1">任务内容</label>
+                <textarea id="recurring-content" rows="2" placeholder="每天要做的任务内容..." class="w-full px-3 py-2 text-sm border border-stone-200 rounded-xl resize-none"></textarea>
+              </div>
+            </div>
+          `,
+          confirmText: '创建',
+          onConfirm: () => {
+            const subjectId = document.getElementById('recurring-subject').value;
+            const ruleType = document.getElementById('recurring-type').value;
+            const startDate = document.getElementById('recurring-start-date').value;
+            const content = document.getElementById('recurring-content').value;
+
+            const weekDays = [];
+            document.querySelectorAll('.recurring-day-btn.bg-amber-400').forEach(btn => {
+              weekDays.push(parseInt(btn.dataset.day));
+            });
+
+            if (!content.trim()) { Toast.error('请输入任务内容'); return; }
+            if (ruleType === 'weekly' && weekDays.length === 0) { Toast.error('请选择至少一天'); return; }
+
+            RecurringModule.addRule({ subjectId, content, ruleType, weekDays, startDate });
+            Toast.success('重复任务已创建');
+            renderSettings();
+          }
+        });
+
+        // 周日期选择
+        setTimeout(() => {
+          const typeSelect = document.getElementById('recurring-type');
+          const weekdaysDiv = document.getElementById('recurring-weekdays');
+          if (typeSelect && weekdaysDiv) {
+            typeSelect.addEventListener('change', () => {
+              weekdaysDiv.classList.toggle('hidden', typeSelect.value === 'daily');
+            });
+          }
+          document.querySelectorAll('.recurring-day-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+              btn.classList.toggle('bg-amber-400');
+              btn.classList.toggle('text-white');
+              btn.classList.toggle('border-amber-400');
+              btn.classList.toggle('border-stone-200');
+              btn.classList.toggle('text-stone-500');
+            });
+          });
+        }, 100);
+      });
+    }
+
+    // 暂停/启用/删除周期性任务
+    document.querySelectorAll('.toggle-recurring').forEach(btn => {
+      btn.addEventListener('click', () => {
+        RecurringModule.toggleRule(btn.dataset.id);
+        Toast.success('重复任务状态已更新');
+        renderSettings();
+      });
+    });
+    document.querySelectorAll('.delete-recurring').forEach(btn => {
+      btn.addEventListener('click', () => {
+        RecurringModule.removeRule(btn.dataset.id);
+        Toast.success('重复任务已删除');
+        renderSettings();
+      });
+    });
+
+    // ─── 云端同步事件 ───
+    const loginBtn = document.getElementById('login-btn');
+    if (loginBtn) {
+      loginBtn.addEventListener('click', () => {
+        const username = document.getElementById('sync-username')?.value || '';
+        const password = document.getElementById('sync-password')?.value || '';
+        const result = SyncModule.login(username, password);
+        if (result.ok) {
+          Toast.success(result.msg);
+          renderSettings();
+        } else {
+          Toast.error(result.msg);
+        }
+      });
+    }
+
+    const syncNowBtn = document.getElementById('sync-now-btn');
+    if (syncNowBtn) {
+      syncNowBtn.addEventListener('click', () => {
+        const result = SyncModule.syncAll();
+        Toast.success('数据同步完成');
+      });
+    }
+
+    const logoutBtn = document.getElementById('logout-btn');
+    if (logoutBtn) {
+      logoutBtn.addEventListener('click', () => {
+        SyncModule.logout();
+        Toast.success('已退出登录');
+        renderSettings();
+      });
+    }
+  }
+
+  // ─── 科目拖拽排序逻辑 ───
+  function bindSubjectDrag() {
+    const list = document.getElementById('subject-list');
+    if (!list) return;
+
+    const items = list.querySelectorAll('.subject-drag-item');
+
+    items.forEach(item => {
+      const dragHandle = item.querySelector('.cursor-grab');
+      if (!dragHandle) return;
+
+      item.addEventListener('dragstart', e => {
+        e.dataTransfer.effectAllowed = 'move';
+        item.classList.add('opacity-50', 'bg-amber-50');
+        e.dataTransfer.setData('text/plain', item.dataset.subjectId);
+      });
+
+      item.addEventListener('dragend', () => {
+        item.classList.remove('opacity-50', 'bg-amber-50');
+        // 清除所有高亮
+        items.forEach(i => i.classList.remove('border-t-2', 'border-amber-400'));
+      });
+
+      item.addEventListener('dragover', e => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+      });
+
+      item.addEventListener('dragenter', e => {
+        e.preventDefault();
+        items.forEach(i => i.classList.remove('border-t-2', 'border-amber-400'));
+        item.classList.add('border-t-2', 'border-amber-400');
+      });
+
+      item.addEventListener('dragleave', () => {
+        item.classList.remove('border-t-2', 'border-amber-400');
+      });
+
+      item.addEventListener('drop', e => {
+        e.preventDefault();
+        item.classList.remove('border-t-2', 'border-amber-400');
+        const draggedId = e.dataTransfer.getData('text/plain');
+        if (!draggedId) return;
+
+        // 获取当前排序
+        const currentItems = [...list.querySelectorAll('.subject-drag-item')];
+        const orderedIds = currentItems.map(el => el.dataset.subjectId);
+
+        // 取出被拖拽的，插入到目标位置之前
+        const fromIdx = orderedIds.indexOf(draggedId);
+        const toIdx = orderedIds.indexOf(item.dataset.subjectId);
+        if (fromIdx === -1 || toIdx === -1 || fromIdx === toIdx) return;
+
+        orderedIds.splice(fromIdx, 1);
+        orderedIds.splice(toIdx, 0, draggedId);
+
+        SubjectModule.reorder(orderedIds);
+        Toast.success('科目排序已更新');
+        renderSettings();
+      });
+    });
   }
 
   return { init, handleRoute, renderHome, renderCalendar, renderReview, renderSettings };

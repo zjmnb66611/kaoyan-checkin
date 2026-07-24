@@ -376,6 +376,8 @@
 <script src="js/modules/rest.js"></script>
 <script src="js/modules/checkin.js"></script>
 <script src="js/modules/review.js"></script>
+<script src="js/modules/recurring.js"></script>
+<script src="js/modules/sync.js"></script>
 <script src="js/components/modal.js"></script>
 <script src="js/app.js"></script>
 
@@ -384,9 +386,38 @@
 
 // 全局任务交互委托
 document.addEventListener('click', e => {
-  // 勾选任务
+  // 批量选择复选框
+  const batchCheck = e.target.closest('.batch-check');
+  if (batchCheck) {
+    const toolbar = document.getElementById('batch-toolbar');
+    if (!toolbar || toolbar.classList.contains('hidden')) return; // 批量模式未激活
+    const taskId = batchCheck.dataset.taskId;
+    if (batchSelected.has(taskId)) {
+      batchSelected.delete(taskId);
+      batchCheck.classList.remove('bg-amber-400', 'border-amber-400');
+      const icon = batchCheck.querySelector('i');
+      if (icon) icon.classList.add('hidden');
+      const card = batchCheck.closest('.task-card');
+      if (card) card.classList.remove('ring-2', 'ring-amber-300');
+    } else {
+      batchSelected.add(taskId);
+      batchCheck.classList.add('bg-amber-400', 'border-amber-400');
+      const icon = batchCheck.querySelector('i');
+      if (icon) icon.classList.remove('hidden');
+      const card = batchCheck.closest('.task-card');
+      if (card) card.classList.add('ring-2', 'ring-amber-300');
+    }
+    const countEl = document.getElementById('batch-count');
+    if (countEl) countEl.textContent = `已选 ${batchSelected.size} 项`;
+    return;
+  }
+
+  // 勾选任务（非批量模式下）
   const checkbox = e.target.closest('.task-checkbox');
   if (checkbox) {
+    // 如果批量工具栏激活，拦截勾选
+    const toolbar = document.getElementById('batch-toolbar');
+    if (toolbar && !toolbar.classList.contains('hidden')) return;
     const taskId = checkbox.dataset.taskId;
     const task = TaskModule.getTaskById(taskId);
     if (task) {

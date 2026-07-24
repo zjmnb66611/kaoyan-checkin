@@ -1159,8 +1159,8 @@ const App = (() => {
           <h3 class="font-bold text-stone-800 text-sm mb-3">🔔 断卡预警</h3>
           <label class="flex items-center justify-between cursor-pointer">
             <span class="text-sm text-stone-600">每日 ${settings.breakWarningTime} 后检查打卡</span>
-            <div class="relative">
-              <input type="checkbox" id="break-warning" ${settings.breakWarning ? 'checked' : ''}>
+            <div class="relative cursor-pointer" onclick="var cb=document.getElementById('break-warning');cb.checked=!cb.checked;cb.dispatchEvent(new Event('change',{bubbles:true}));">
+              <input type="checkbox" id="break-warning" style="position:absolute;opacity:0;pointer-events:none;width:0;height:0" ${settings.breakWarning ? 'checked' : ''}>
               <div class="toggle-bg w-11 h-6 rounded-full transition-all ${settings.breakWarning ? 'bg-amber-400' : 'bg-stone-300'}"></div>
               <div class="toggle-dot absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-all ${settings.breakWarning ? 'translate-x-5' : ''}"></div>
             </div>

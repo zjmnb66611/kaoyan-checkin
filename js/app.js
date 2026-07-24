@@ -289,7 +289,6 @@ const App = (() => {
       renderSettings();
     });
 
-    // 处理 change 事件的委托（checkbox、select、input[type=date]）
     DOM.delegate(settingsEl, 'change', '#auto-postpone', function() {
       State.update('settings', { autoPostpone: this.checked });
       State.persist('settings');
@@ -306,12 +305,12 @@ const App = (() => {
     DOM.delegate(settingsEl, 'change', '#view-mode-select', function() {
       State.update('settings', { viewMode: this.value });
       State.persist('settings');
-      renderHome();
+      if (currentPage === 'home') renderHome();
     });
     DOM.delegate(settingsEl, 'change', '#task-style-select', function() {
       State.update('settings', { taskStyle: this.value });
       State.persist('settings');
-      renderHome();
+      if (currentPage === 'home') renderHome();
     });
   }
 

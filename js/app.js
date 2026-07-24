@@ -1251,9 +1251,46 @@ const App = (() => {
     bindSettingsEvents();
   }
 
+  function addSettingsInlineHandlers() {
+    // 断卡预警、视图偏好、任务样式 — 每次 renderSettings() 后内联绑定
+    // 不使用委托是为了 100% 确保每次 innerHTML 替换后都能正确触发
+    var bw = document.getElementById('break-warning');
+    if (bw) bw.onchange = function() {
+      State.update('settings', { breakWarning: this.checked });
+      State.persist('settings');
+    };
+
+    var vm = document.getElementById('view-mode-select');
+    if (vm) vm.onchange = function() {
+      State.update('settings', { viewMode: this.value });
+      State.persist('settings');
+      if (currentPage === 'home') renderHome();
+    };
+
+    var ts = document.getElementById('task-style-select');
+    if (ts) ts.onchange = function() {
+      State.update('settings', { taskStyle: this.value });
+      State.persist('settings');
+      if (currentPage === 'home') renderHome();
+    };
+
+    var ap = document.getElementById('auto-postpone');
+    if (ap) ap.onchange = function() {
+      State.update('settings', { autoPostpone: this.checked });
+      State.persist('settings');
+    };
+
+    var ei = document.getElementById('exam-date-input');
+    if (ei) ei.onchange = function() {
+      State.update('settings', { examDate: this.value });
+      State.persist('settings');
+      Toast.success('考研日期已更新');
+    };
+  }
+
   function bindSettingsEvents() {
-    // 仅处理科目拖拽排序（需要 DOM 就绪）。其余事件由 init() 中注册的全局委托处理。
     bindSubjectDrag();
+    addSettingsInlineHandlers();
   }
 
   // ─── 科目拖拽排序逻辑 ───

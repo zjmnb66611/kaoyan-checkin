@@ -298,20 +298,6 @@ const App = (() => {
       State.persist('settings');
       Toast.success('考研日期已更新');
     });
-    DOM.delegate(settingsEl, 'change', '#break-warning', function() {
-      State.update('settings', { breakWarning: this.checked });
-      State.persist('settings');
-    });
-    DOM.delegate(settingsEl, 'change', '#view-mode-select', function() {
-      State.update('settings', { viewMode: this.value });
-      State.persist('settings');
-      if (currentPage === 'home') renderHome();
-    });
-    DOM.delegate(settingsEl, 'change', '#task-style-select', function() {
-      State.update('settings', { taskStyle: this.value });
-      State.persist('settings');
-      if (currentPage === 'home') renderHome();
-    });
   }
 
   function handleRoute() {
@@ -1153,39 +1139,6 @@ const App = (() => {
           <h3 class="font-bold text-stone-800 text-sm mb-3">🗓️ 考研日期</h3>
           <input type="date" id="exam-date-input" value="${settings.examDate}" class="w-full px-3 py-2 text-sm border border-stone-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-300">
         </div>
-
-        <!-- 断卡预警 -->
-        <div class="bg-white rounded-2xl border border-stone-100 p-4 shadow-sm">
-          <h3 class="font-bold text-stone-800 text-sm mb-3">🔔 断卡预警</h3>
-          <label class="flex items-center justify-between cursor-pointer">
-            <span class="text-sm text-stone-600">每日 ${settings.breakWarningTime} 后检查打卡</span>
-            <div class="relative cursor-pointer" onclick="var cb=document.getElementById('break-warning');cb.checked=!cb.checked;cb.dispatchEvent(new Event('change',{bubbles:true}));">
-              <input type="checkbox" id="break-warning" style="position:absolute;opacity:0;pointer-events:none;width:0;height:0" ${settings.breakWarning ? 'checked' : ''}>
-              <div class="toggle-bg w-11 h-6 rounded-full transition-all ${settings.breakWarning ? 'bg-amber-400' : 'bg-stone-300'}"></div>
-              <div class="toggle-dot absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-all ${settings.breakWarning ? 'translate-x-5' : ''}"></div>
-            </div>
-          </label>
-        </div>
-
-        <!-- 视图偏好 -->
-        <div class="bg-white rounded-2xl border border-stone-100 p-4 shadow-sm">
-          <h3 class="font-bold text-stone-800 text-sm mb-3">🎨 视图偏好</h3>
-          <div class="flex items-center justify-between mb-3">
-            <span class="text-sm text-stone-600">任务列表模式</span>
-            <select id="view-mode-select" class="text-sm border border-stone-200 rounded-lg px-2 py-1">
-              <option value="compact" ${settings.viewMode === 'compact' ? 'selected' : ''}>紧凑模式</option>
-              <option value="comfortable" ${settings.viewMode === 'comfortable' ? 'selected' : ''}>宽松模式</option>
-            </select>
-          </div>
-          <div class="flex items-center justify-between">
-            <span class="text-sm text-stone-600">勾选框位置</span>
-            <select id="task-style-select" class="text-sm border border-stone-200 rounded-lg px-2 py-1">
-              <option value="checkbox-left" ${settings.taskStyle === 'checkbox-left' ? 'selected' : ''}>居左</option>
-              <option value="checkbox-right" ${settings.taskStyle === 'checkbox-right' ? 'selected' : ''}>居右</option>
-            </select>
-          </div>
-        </div>
-
         <!-- 周期性重复任务 -->
         <div class="bg-white rounded-2xl border border-stone-100 p-4 shadow-sm">
           <h3 class="font-bold text-stone-800 text-sm mb-3">🔁 周期性重复任务</h3>
@@ -1252,28 +1205,6 @@ const App = (() => {
   }
 
   function addSettingsInlineHandlers() {
-    // 断卡预警、视图偏好、任务样式 — 每次 renderSettings() 后内联绑定
-    // 不使用委托是为了 100% 确保每次 innerHTML 替换后都能正确触发
-    var bw = document.getElementById('break-warning');
-    if (bw) bw.onchange = function() {
-      State.update('settings', { breakWarning: this.checked });
-      State.persist('settings');
-    };
-
-    var vm = document.getElementById('view-mode-select');
-    if (vm) vm.onchange = function() {
-      State.update('settings', { viewMode: this.value });
-      State.persist('settings');
-      if (currentPage === 'home') renderHome();
-    };
-
-    var ts = document.getElementById('task-style-select');
-    if (ts) ts.onchange = function() {
-      State.update('settings', { taskStyle: this.value });
-      State.persist('settings');
-      if (currentPage === 'home') renderHome();
-    };
-
     var ap = document.getElementById('auto-postpone');
     if (ap) ap.onchange = function() {
       State.update('settings', { autoPostpone: this.checked });

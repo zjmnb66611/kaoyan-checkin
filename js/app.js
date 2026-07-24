@@ -52,7 +52,267 @@ const App = (() => {
       // 可以在这里播放音效或动画
     });
 
+    // 设置页全局委托（只注册一次，不受 innerHTML 替换影响）
+    _setupSettingsDelegates();
+
     // 初始化时不重复渲染（handleRoute 会调用）
+  }
+
+  let _settingsDelegatesDone = false;
+  function _setupSettingsDelegates() {
+    if (_settingsDelegatesDone) return;
+    _settingsDelegatesDone = true;
+
+    const settingsEl = document.getElementById('page-settings');
+    if (!settingsEl) { _settingsDelegatesDone = false; return; }
+
+    // 利用 DOM.delegate 做委托，只绑定一次，不受 innerHTML 影响
+    DOM.delegate(settingsEl, 'click', '#add-subject-btn', function() {
+      const input = document.getElementById('new-subject-name');
+      if (!input || !input.value.trim()) {
+        Toast.warning('请输入科目名称');
+        return;
+      }
+      try {
+        SubjectModule.add(input.value.trim());
+        input.value = '';
+        Toast.success('科目添加成功');
+        renderSettings();
+      } catch (e) {
+        Toast.error('科目添加失败：' + e.message);
+      }
+    });
+
+    DOM.delegate(settingsEl, 'click', '.delete-subject', function() {
+      const btn = this;
+      Modal.confirm({
+        title: '删除科目',
+        body: '删除后该科目下的任务将保留但不再显示科目标签，确认删除？',
+        confirmText: '删除',
+        onConfirm: () => {
+          SubjectModule.remove(btn.dataset.id);
+          Toast.success('科目已删除');
+          renderSettings();
+        }
+      });
+    });
+
+    DOM.delegate(settingsEl, 'click', '.weekly-rest-btn', function() {
+      const day = parseInt(this.dataset.day);
+      let current = RestModule.getWeeklyRestDays();
+      if (current.includes(day)) {
+        current = current.filter(d => d !== day);
+      } else {
+        current.push(day);
+      }
+      RestModule.setWeeklyRestDays(current);
+      renderSettings();
+      Toast.success('休息日设置已更新');
+    });
+
+    DOM.delegate(settingsEl, 'click', '#add-temp-rest-btn', function() {
+      const start = prompt('请输入起始日期 (YYYY-MM-DD)：', DateUtils.today());
+      if (!start) return;
+      const end = prompt('请输入结束日期（单日可留空）：', start) || start;
+      RestModule.addTemporaryRest(start, end);
+      Toast.success('临时休息日已添加');
+      renderSettings();
+    });
+
+    DOM.delegate(settingsEl, 'click', '.remove-temp-rest', function() {
+      RestModule.removeTemporaryRest(this.dataset.id);
+      Toast.success('临时休息日已取消');
+      renderSettings();
+    });
+
+    DOM.delegate(settingsEl, 'click', '#add-leave-btn', function() {
+      const start = prompt('请输入请假起始日期 (YYYY-MM-DD)：', DateUtils.today());
+      if (!start) return;
+      const end = prompt('请输入请假结束日期：', start) || start;
+      RestModule.addLeave(start, end);
+      Toast.success('请假已记录，任务已顺延');
+      renderSettings();
+    });
+
+    DOM.delegate(settingsEl, 'click', '.revoke-leave', function() {
+      const btn = this;
+      Modal.show({
+        title: '撤销请假',
+        bodyHTML: `
+          <p class="text-sm text-stone-600 mb-3">请选择撤销方式：</p>
+          <button class="w-full py-2 mb-2 rounded-xl border border-stone-200 text-sm hover:bg-stone-50 transition-all revoke-keep" data-id="${btn.dataset.id}">
+            保持任务已顺延状态
+          </button>
+          <button class="w-full py-2 rounded-xl border border-stone-200 text-sm hover:bg-stone-50 transition-all revoke-restore" data-id="${btn.dataset.id}">
+            还原任务至原始日期
+          </button>
+        `,
+        showCancel: true,
+        cancelText: '关闭',
+        confirmText: '',
+        onConfirm: () => {}
+      });
+      setTimeout(() => {
+        const keepBtn = document.querySelector('.revoke-keep');
+        const restoreBtn = document.querySelector('.revoke-restore');
+        if (keepBtn) keepBtn.addEventListener('click', () => {
+          RestModule.revokeLeave(btn.dataset.id, 'keep_postponed');
+          Modal.close();
+          Toast.success('请假已撤销（保持顺延状态）');
+          renderSettings();
+        });
+        if (restoreBtn) restoreBtn.addEventListener('click', () => {
+          RestModule.revokeLeave(btn.dataset.id, 'restore_original');
+          Modal.close();
+          Toast.success('请假已撤销（任务已还原）');
+          renderSettings();
+        });
+      }, 100);
+    });
+
+    DOM.delegate(settingsEl, 'click', '#reset-all-btn', function() {
+      Modal.confirm({
+        title: '⚠️ 警告',
+        body: '将删除所有本地数据，此操作不可撤销！确认继续？',
+        confirmText: '确认重置',
+        onConfirm: () => {
+          const keys = ['tasks','subjects','restDays','leaves','recurringRules','settings','checkinStats','user'];
+          keys.forEach(k => localStorage.removeItem('kaoyan_' + k));
+          State.loadFromStorage();
+          Toast.success('全部数据已重置');
+          location.reload();
+        }
+      });
+    });
+
+    DOM.delegate(settingsEl, 'click', '#add-recurring-btn', function() {
+      const subjects = SubjectModule.getAll();
+      const dayNames = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+      Modal.show({
+        title: '🔁 新建重复任务',
+        bodyHTML: `
+          <div class="space-y-3 text-left">
+            <div>
+              <label class="text-xs text-stone-500 block mb-1">科目（可选）</label>
+              <select id="recurring-subject" class="w-full px-3 py-2 text-sm border border-stone-200 rounded-xl">
+                <option value="">选择科目</option>
+                ${subjects.map(s => `<option value="${s.id}">${s.name}</option>`).join('')}
+              </select>
+            </div>
+            <div>
+              <label class="text-xs text-stone-500 block mb-1">重复类型</label>
+              <select id="recurring-type" class="w-full px-3 py-2 text-sm border border-stone-200 rounded-xl">
+                <option value="daily">每日重复</option>
+                <option value="weekly">每周固定日期</option>
+              </select>
+            </div>
+            <div id="recurring-weekdays" class="hidden flex flex-wrap gap-1.5">
+              ${dayNames.map((name, idx) => `
+                <button class="recurring-day-btn px-2 py-1 rounded-full text-xs border border-stone-200 text-stone-500 hover:border-amber-300 transition-all" data-day="${idx}">${name}</button>
+              `).join('')}
+            </div>
+            <div>
+              <label class="text-xs text-stone-500 block mb-1">开始日期</label>
+              <input type="date" id="recurring-start-date" value="${DateUtils.today()}" class="w-full px-3 py-2 text-sm border border-stone-200 rounded-xl">
+            </div>
+            <div>
+              <label class="text-xs text-stone-500 block mb-1">任务内容</label>
+              <textarea id="recurring-content" rows="2" placeholder="每天要做的任务内容..." class="w-full px-3 py-2 text-sm border border-stone-200 rounded-xl resize-none"></textarea>
+            </div>
+          </div>
+        `,
+        confirmText: '创建',
+        onConfirm: () => {
+          const subjectId = document.getElementById('recurring-subject').value;
+          const ruleType = document.getElementById('recurring-type').value;
+          const startDate = document.getElementById('recurring-start-date').value;
+          const content = document.getElementById('recurring-content').value;
+          const weekDays = [];
+          document.querySelectorAll('.recurring-day-btn.bg-amber-400').forEach(btn2 => {
+            weekDays.push(parseInt(btn2.dataset.day));
+          });
+          if (!content.trim()) { Toast.error('请输入任务内容'); return; }
+          if (ruleType === 'weekly' && weekDays.length === 0) { Toast.error('请选择至少一天'); return; }
+          RecurringModule.addRule({ subjectId, content, ruleType, weekDays, startDate });
+          Toast.success('重复任务已创建');
+          renderSettings();
+        }
+      });
+      setTimeout(() => {
+        const typeSelect = document.getElementById('recurring-type');
+        const weekdaysDiv = document.getElementById('recurring-weekdays');
+        if (typeSelect && weekdaysDiv) {
+          typeSelect.addEventListener('change', () => {
+            weekdaysDiv.classList.toggle('hidden', typeSelect.value === 'daily');
+          });
+        }
+        document.querySelectorAll('.recurring-day-btn').forEach(btn_day => {
+          btn_day.addEventListener('click', () => {
+            btn_day.classList.toggle('bg-amber-400');
+            btn_day.classList.toggle('text-white');
+            btn_day.classList.toggle('border-amber-400');
+            btn_day.classList.toggle('border-stone-200');
+            btn_day.classList.toggle('text-stone-500');
+          });
+        });
+      }, 100);
+    });
+
+    DOM.delegate(settingsEl, 'click', '.toggle-recurring', function() {
+      RecurringModule.toggleRule(this.dataset.id);
+      Toast.success('重复任务状态已更新');
+      renderSettings();
+    });
+
+    DOM.delegate(settingsEl, 'click', '.delete-recurring', function() {
+      RecurringModule.removeRule(this.dataset.id);
+      Toast.success('重复任务已删除');
+      renderSettings();
+    });
+
+    DOM.delegate(settingsEl, 'click', '#login-btn', function() {
+      const username = document.getElementById('sync-username')?.value || '';
+      const password = document.getElementById('sync-password')?.value || '';
+      const result = SyncModule.login(username, password);
+      if (result.ok) { Toast.success(result.msg); renderSettings(); }
+      else { Toast.error(result.msg); }
+    });
+
+    DOM.delegate(settingsEl, 'click', '#sync-now-btn', function() {
+      SyncModule.syncAll();
+      Toast.success('数据同步完成');
+    });
+
+    DOM.delegate(settingsEl, 'click', '#logout-btn', function() {
+      SyncModule.logout();
+      Toast.success('已退出登录');
+      renderSettings();
+    });
+
+    // 处理 change 事件的委托（checkbox、select、input[type=date]）
+    DOM.delegate(settingsEl, 'change', '#auto-postpone', function() {
+      State.update('settings', { autoPostpone: this.checked });
+      State.persist('settings');
+    });
+    DOM.delegate(settingsEl, 'change', '#exam-date-input', function() {
+      State.update('settings', { examDate: this.value });
+      State.persist('settings');
+      Toast.success('考研日期已更新');
+    });
+    DOM.delegate(settingsEl, 'change', '#break-warning', function() {
+      State.update('settings', { breakWarning: this.checked });
+      State.persist('settings');
+    });
+    DOM.delegate(settingsEl, 'change', '#view-mode-select', function() {
+      State.update('settings', { viewMode: this.value });
+      State.persist('settings');
+      renderHome();
+    });
+    DOM.delegate(settingsEl, 'change', '#task-style-select', function() {
+      State.update('settings', { taskStyle: this.value });
+      State.persist('settings');
+      renderHome();
+    });
   }
 
   function handleRoute() {
@@ -93,9 +353,8 @@ const App = (() => {
     }
 
     // 使用 setTimeout 0 延迟渲染，保证 DOM 状态更新后再计算
-    if (window._routeTimerId) clearTimeout(window._routeTimerId);
-    window._routeTimerId = setTimeout(() => {
-      window._routeTimerId = null;
+    // 不清除已有定时器 — 允许同一页面被重复渲染（如设置页功能操作后 refresh）
+    setTimeout(() => {
       switch (page) {
         case 'home': renderHome(); break;
         case 'calendar': renderCalendar(); break;
@@ -994,333 +1253,8 @@ const App = (() => {
   }
 
   function bindSettingsEvents() {
-    // 防御：清除之前绑定的事件钩子，防止重复绑定
-    const el = document.getElementById('page-settings');
-
-    // 添加科目 — 使用 onreplaceclick 模式防止重复绑定
-    const addSubjectBtn = document.getElementById('add-subject-btn');
-    if (addSubjectBtn) {
-      const cloned = addSubjectBtn.cloneNode(true);
-      addSubjectBtn.parentNode.replaceChild(cloned, addSubjectBtn);
-      cloned.addEventListener('click', () => {
-        const input = document.getElementById('new-subject-name');
-        if (!input || !input.value.trim()) {
-          Toast.warning('请输入科目名称');
-          return;
-        }
-        try {
-          SubjectModule.add(input.value.trim());
-          input.value = '';
-          Toast.success('科目添加成功');
-          renderSettings();
-        } catch (e) {
-          Toast.error('科目添加失败：' + e.message);
-        }
-      });
-    }
-
-    // 删除科目
-    document.querySelectorAll('.delete-subject').forEach(btn => {
-      btn.addEventListener('click', () => {
-        Modal.confirm({
-          title: '删除科目',
-          body: '删除后该科目下的任务将保留但不再显示科目标签，确认删除？',
-          confirmText: '删除',
-          onConfirm: () => {
-            SubjectModule.remove(btn.dataset.id);
-            Toast.success('科目已删除');
-            renderSettings();
-          }
-        });
-      });
-    });
-
-    // 科目拖拽排序
+    // 仅处理科目拖拽排序（需要 DOM 就绪）。其余事件由 init() 中注册的全局委托处理。
     bindSubjectDrag();
-
-    // 自动顺延开关
-    const postponeToggle = document.getElementById('auto-postpone');
-    if (postponeToggle) {
-      postponeToggle.addEventListener('change', () => {
-        State.update('settings', { autoPostpone: postponeToggle.checked });
-        State.persist('settings');
-      });
-    }
-
-    // 周期休息日按钮
-    document.querySelectorAll('.weekly-rest-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const day = parseInt(btn.dataset.day);
-        let current = RestModule.getWeeklyRestDays();
-        if (current.includes(day)) {
-          current = current.filter(d => d !== day);
-        } else {
-          current.push(day);
-        }
-        RestModule.setWeeklyRestDays(current);
-        renderSettings();
-        Toast.success('休息日设置已更新');
-      });
-    });
-
-    // 临时休息日
-    const addTempRest = document.getElementById('add-temp-rest-btn');
-    if (addTempRest) {
-      addTempRest.addEventListener('click', () => {
-        const start = prompt('请输入起始日期 (YYYY-MM-DD)：', DateUtils.today());
-        if (!start) return;
-        const end = prompt('请输入结束日期（单日可留空）：', start) || start;
-        RestModule.addTemporaryRest(start, end);
-        Toast.success('临时休息日已添加');
-        renderSettings();
-      });
-    }
-
-    document.querySelectorAll('.remove-temp-rest').forEach(btn => {
-      btn.addEventListener('click', () => {
-        RestModule.removeTemporaryRest(btn.dataset.id);
-        Toast.success('临时休息日已取消');
-        renderSettings();
-      });
-    });
-
-    // 请假
-    const addLeave = document.getElementById('add-leave-btn');
-    if (addLeave) {
-      addLeave.addEventListener('click', () => {
-        const start = prompt('请输入请假起始日期 (YYYY-MM-DD)：', DateUtils.today());
-        if (!start) return;
-        const end = prompt('请输入请假结束日期：', start) || start;
-        RestModule.addLeave(start, end);
-        Toast.success('请假已记录，任务已顺延');
-        renderSettings();
-      });
-    }
-
-    document.querySelectorAll('.revoke-leave').forEach(btn => {
-      btn.addEventListener('click', () => {
-        Modal.show({
-          title: '撤销请假',
-          body: '请选择撤销方式：',
-          bodyHTML: `
-            <p class="text-sm text-stone-600 mb-3">请选择撤销方式：</p>
-            <button class="w-full py-2 mb-2 rounded-xl border border-stone-200 text-sm hover:bg-stone-50 transition-all revoke-keep" data-id="${btn.dataset.id}">
-              保持任务已顺延状态
-            </button>
-            <button class="w-full py-2 rounded-xl border border-stone-200 text-sm hover:bg-stone-50 transition-all revoke-restore" data-id="${btn.dataset.id}">
-              还原任务至原始日期
-            </button>
-          `,
-          showCancel: true,
-          cancelText: '关闭',
-          confirmText: '',
-          onConfirm: () => {} // 按钮自己处理
-        });
-
-        setTimeout(() => {
-          document.querySelector('.revoke-keep')?.addEventListener('click', () => {
-            RestModule.revokeLeave(btn.dataset.id, 'keep_postponed');
-            Modal.close();
-            Toast.success('请假已撤销（保持顺延状态）');
-            renderSettings();
-          });
-          document.querySelector('.revoke-restore')?.addEventListener('click', () => {
-            RestModule.revokeLeave(btn.dataset.id, 'restore_original');
-            Modal.close();
-            Toast.success('请假已撤销（任务已还原）');
-            renderSettings();
-          });
-        }, 100);
-      });
-    });
-
-    // 考研日期
-    const examInput = document.getElementById('exam-date-input');
-    if (examInput) {
-      examInput.addEventListener('change', () => {
-        State.update('settings', { examDate: examInput.value });
-        State.persist('settings');
-        Toast.success('考研日期已更新');
-      });
-    }
-
-    // 断卡预警开关
-    const breakWarningToggle = document.getElementById('break-warning');
-    if (breakWarningToggle) {
-      breakWarningToggle.addEventListener('change', () => {
-        State.update('settings', { breakWarning: breakWarningToggle.checked });
-        State.persist('settings');
-      });
-    }
-
-    // 视图偏好
-    const viewMode = document.getElementById('view-mode-select');
-    if (viewMode) {
-      viewMode.addEventListener('change', () => {
-        State.update('settings', { viewMode: viewMode.value });
-        State.persist('settings');
-        renderHome();
-      });
-    }
-
-    const taskStyle = document.getElementById('task-style-select');
-    if (taskStyle) {
-      taskStyle.addEventListener('change', () => {
-        State.update('settings', { taskStyle: taskStyle.value });
-        State.persist('settings');
-        renderHome();
-      });
-    }
-
-    // 重置全部数据
-    const resetBtn = document.getElementById('reset-all-btn');
-    if (resetBtn) {
-      resetBtn.addEventListener('click', () => {
-        Modal.confirm({
-          title: '⚠️ 警告',
-          body: '将删除所有本地数据，此操作不可撤销！确认继续？',
-          confirmText: '确认重置',
-          onConfirm: () => {
-            const keys = ['tasks','subjects','restDays','leaves','recurringRules','settings','checkinStats','user'];
-            keys.forEach(k => localStorage.removeItem('kaoyan_' + k));
-            State.loadFromStorage();
-            Toast.success('全部数据已重置');
-            location.reload();
-          }
-        });
-      });
-    }
-
-    // ─── 周期性任务事件 ───
-    const addRecurringBtn = document.getElementById('add-recurring-btn');
-    if (addRecurringBtn) {
-      addRecurringBtn.addEventListener('click', () => {
-        const subjects = SubjectModule.getAll();
-        const dayNames = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
-        Modal.show({
-          title: '🔁 新建重复任务',
-          bodyHTML: `
-            <div class="space-y-3 text-left">
-              <div>
-                <label class="text-xs text-stone-500 block mb-1">科目（可选）</label>
-                <select id="recurring-subject" class="w-full px-3 py-2 text-sm border border-stone-200 rounded-xl">
-                  <option value="">选择科目</option>
-                  ${subjects.map(s => `<option value="${s.id}">${s.name}</option>`).join('')}
-                </select>
-              </div>
-              <div>
-                <label class="text-xs text-stone-500 block mb-1">重复类型</label>
-                <select id="recurring-type" class="w-full px-3 py-2 text-sm border border-stone-200 rounded-xl">
-                  <option value="daily">每日重复</option>
-                  <option value="weekly">每周固定日期</option>
-                </select>
-              </div>
-              <div id="recurring-weekdays" class="hidden flex flex-wrap gap-1.5">
-                ${dayNames.map((name, idx) => `
-                  <button class="recurring-day-btn px-2 py-1 rounded-full text-xs border border-stone-200 text-stone-500 hover:border-amber-300 transition-all" data-day="${idx}">${name}</button>
-                `).join('')}
-              </div>
-              <div>
-                <label class="text-xs text-stone-500 block mb-1">开始日期</label>
-                <input type="date" id="recurring-start-date" value="${DateUtils.today()}" class="w-full px-3 py-2 text-sm border border-stone-200 rounded-xl">
-              </div>
-              <div>
-                <label class="text-xs text-stone-500 block mb-1">任务内容</label>
-                <textarea id="recurring-content" rows="2" placeholder="每天要做的任务内容..." class="w-full px-3 py-2 text-sm border border-stone-200 rounded-xl resize-none"></textarea>
-              </div>
-            </div>
-          `,
-          confirmText: '创建',
-          onConfirm: () => {
-            const subjectId = document.getElementById('recurring-subject').value;
-            const ruleType = document.getElementById('recurring-type').value;
-            const startDate = document.getElementById('recurring-start-date').value;
-            const content = document.getElementById('recurring-content').value;
-
-            const weekDays = [];
-            document.querySelectorAll('.recurring-day-btn.bg-amber-400').forEach(btn => {
-              weekDays.push(parseInt(btn.dataset.day));
-            });
-
-            if (!content.trim()) { Toast.error('请输入任务内容'); return; }
-            if (ruleType === 'weekly' && weekDays.length === 0) { Toast.error('请选择至少一天'); return; }
-
-            RecurringModule.addRule({ subjectId, content, ruleType, weekDays, startDate });
-            Toast.success('重复任务已创建');
-            renderSettings();
-          }
-        });
-
-        // 周日期选择
-        setTimeout(() => {
-          const typeSelect = document.getElementById('recurring-type');
-          const weekdaysDiv = document.getElementById('recurring-weekdays');
-          if (typeSelect && weekdaysDiv) {
-            typeSelect.addEventListener('change', () => {
-              weekdaysDiv.classList.toggle('hidden', typeSelect.value === 'daily');
-            });
-          }
-          document.querySelectorAll('.recurring-day-btn').forEach(btn => {
-            btn.addEventListener('click', () => {
-              btn.classList.toggle('bg-amber-400');
-              btn.classList.toggle('text-white');
-              btn.classList.toggle('border-amber-400');
-              btn.classList.toggle('border-stone-200');
-              btn.classList.toggle('text-stone-500');
-            });
-          });
-        }, 100);
-      });
-    }
-
-    // 暂停/启用/删除周期性任务
-    document.querySelectorAll('.toggle-recurring').forEach(btn => {
-      btn.addEventListener('click', () => {
-        RecurringModule.toggleRule(btn.dataset.id);
-        Toast.success('重复任务状态已更新');
-        renderSettings();
-      });
-    });
-    document.querySelectorAll('.delete-recurring').forEach(btn => {
-      btn.addEventListener('click', () => {
-        RecurringModule.removeRule(btn.dataset.id);
-        Toast.success('重复任务已删除');
-        renderSettings();
-      });
-    });
-
-    // ─── 云端同步事件 ───
-    const loginBtn = document.getElementById('login-btn');
-    if (loginBtn) {
-      loginBtn.addEventListener('click', () => {
-        const username = document.getElementById('sync-username')?.value || '';
-        const password = document.getElementById('sync-password')?.value || '';
-        const result = SyncModule.login(username, password);
-        if (result.ok) {
-          Toast.success(result.msg);
-          renderSettings();
-        } else {
-          Toast.error(result.msg);
-        }
-      });
-    }
-
-    const syncNowBtn = document.getElementById('sync-now-btn');
-    if (syncNowBtn) {
-      syncNowBtn.addEventListener('click', () => {
-        const result = SyncModule.syncAll();
-        Toast.success('数据同步完成');
-      });
-    }
-
-    const logoutBtn = document.getElementById('logout-btn');
-    if (logoutBtn) {
-      logoutBtn.addEventListener('click', () => {
-        SyncModule.logout();
-        Toast.success('已退出登录');
-        renderSettings();
-      });
-    }
   }
 
   // ─── 科目拖拽排序逻辑 ───

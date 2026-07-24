@@ -15,7 +15,7 @@ const SubjectModule = (() => {
   function add(name, color) {
     const subjects = State.get('subjects');
     const colors = ['#E07B5A','#C0392B','#2980B9','#8E44AD','#16A085','#E67E22','#2C3E50','#D4A017'];
-    subjects.push({
+    const newSubject = {
       id: DateUtils.uuid(),
       name: name.trim(),
       color: color || colors[subjects.length % colors.length],
@@ -24,10 +24,12 @@ const SubjectModule = (() => {
       isPreset: false,
       createdAt: DateUtils.nowISO(),
       deleted: false
-    });
+    };
+    subjects.push(newSubject);
     State.set('subjects', subjects);
     State.persist('subjects');
-    return { ok: true };
+    document.dispatchEvent(new CustomEvent('task:changed'));
+    return { ok: true, subject: newSubject };
   }
 
   function rename(id, newName) {

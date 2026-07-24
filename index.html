@@ -386,57 +386,69 @@
 <script src="js/app.js"></script>
 
 <script>
-/* ═══ 导航栏即时点击反馈 ═══ */
+/* ═══ 导航栏即时点击反馈（移动端优化） ═══ */
 (function() {
   const navItems = document.querySelectorAll('#main-nav .nav-item');
-  const pageContainers = document.querySelectorAll('.page-container');
-
-  // 页面级 debounce 锁，防止快速重复点击
   let _navLocked = false;
+  let _currentNavPage = 'home';
+
+  window._navGetCurrentPage = () => _currentNavPage;
+  window._navSetCurrentPage = (page) => { _currentNavPage = page; };
 
   navItems.forEach(item => {
-    // 触屏瞬时反馈
-    item.addEventListener('touchstart', function() {
+    // 抽取导航逻辑为复用函数
+    function doNavigate() {
+      const targetPage = item.dataset.page;
+      if (targetPage === _currentNavPage) return;
+      if (_navLocked) return;
+      _navLocked = true;
+      setTimeout(() => { _navLocked = false; }, 300);
+
+      _currentNavPage = targetPage;
+
+      // 1. 即时切换 active
+      navItems.forEach(el => el.classList.remove('active'));
+      item.classList.add('active');
+
+      // 2. 更新 hash（静默）
+      const newHash = '#/' + targetPage;
+      if (location.hash !== newHash) {
+        history.replaceState(null, '', newHash);
+      }
+
+      // 3. 直接渲染目标页面 — 不使用 setTimeout，确保渲染单次完成
+      try {
+        App.handleRouteDirect(targetPage);
+      } catch (e) {
+        console.error('路由切换失败:', e);
+        _navLocked = false; // 异常时释放锁
+      }
+    }
+
+    // 触屏：用 touchend 消除 300ms 延迟，同时用标志位阻止重复 click
+    let _touchHandled = false;
+
+    item.addEventListener('touchstart', function(e) {
+      _touchHandled = false;
       this.classList.add('nav-touching');
     }, { passive: true });
 
-    item.addEventListener('touchend', function() {
+    item.addEventListener('touchend', function(e) {
       this.classList.remove('nav-touching');
+      if (_touchHandled) return;
+      _touchHandled = true;
+      e.preventDefault();
+      setTimeout(() => { _touchHandled = false; }, 500);
+      doNavigate();
+      // 触觉反馈
+      if (navigator.vibrate) navigator.vibrate(8);
     });
 
-    // 点击立即响应
+    // PC 端 click 兜底；移动端被 _touchHandled 拦截后不会重复执行
     item.addEventListener('click', function(e) {
+      if (_touchHandled) { _touchHandled = false; return; }
       e.preventDefault();
-
-      // 如果已经在这个页面，不做任何事
-      if (this.classList.contains('active')) return;
-
-      // 防抖：600ms 内不允许再次触发
-      if (_navLocked) return;
-      _navLocked = true;
-      setTimeout(() => { _navLocked = false; }, 600);
-
-      const targetPage = this.dataset.page;
-
-      // 第1步：立即切换 active 样式，给用户即时反馈
-      navItems.forEach(el => el.classList.remove('active'));
-      this.classList.add('active');
-
-      // 第2步：立即隐藏所有页面容器
-      pageContainers.forEach(el => el.style.display = 'none');
-
-      // 第3步：延迟一帧（~16ms）更新 hash 和渲染，让浏览器先刷新 active 样式
-      requestAnimationFrame(() => {
-        // 更新 hash（不会重复触发 hashchange 因为下面已接管）
-        const oldHash = location.hash;
-        const newHash = '#/' + targetPage;
-        if (oldHash !== newHash) {
-          // 静默更新 hash 不触发事件
-          history.replaceState(null, '', newHash);
-        }
-        // 直接调用 handleRoute（App 已暴露）
-        App.handleRoute();
-      });
+      doNavigate();
     });
   });
 })();

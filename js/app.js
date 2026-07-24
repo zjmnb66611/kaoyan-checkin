@@ -35,6 +35,7 @@ const App = (() => {
       if (currentPage === 'home') renderHome();
       if (currentPage === 'calendar') renderCalendar();
       if (currentPage === 'review') renderReview();
+      if (currentPage === 'settings') renderSettings();
     });
 
     document.addEventListener('checkin:daily-all-done', () => {
@@ -57,6 +58,19 @@ const App = (() => {
   function handleRoute() {
     const hash = location.hash || '#/home';
     const page = hash.replace('#/', '') || 'home';
+    _doRoute(page);
+  }
+
+  // 直接路由到指定页面（由导航栏调用，无需读 hash）
+  function handleRouteDirect(page) {
+    if (!page) return;
+    _doRoute(page);
+  }
+
+  // 内部路由实现
+  function _doRoute(page) {
+    // 同步导航栏内部页面追踪（如果有）
+    if (window._navSetCurrentPage) window._navSetCurrentPage(page);
 
     // active 样式已由导航栏 click 事件即时处理，此处仅做兜底
     document.querySelectorAll('.nav-item').forEach(el => {
@@ -78,9 +92,10 @@ const App = (() => {
       containerEl.style.display = '';
     }
 
-    // 使用 queueMicrotask 延迟渲染，让浏览器先完成 active 样式重绘
-    if (window._routeMicrotaskId) cancelAnimationFrame(window._routeMicrotaskId);
-    window._routeMicrotaskId = requestAnimationFrame(() => {
+    // 使用 setTimeout 0 延迟渲染，保证 DOM 状态更新后再计算
+    if (window._routeTimerId) clearTimeout(window._routeTimerId);
+    window._routeTimerId = setTimeout(() => {
+      window._routeTimerId = null;
       switch (page) {
         case 'home': renderHome(); break;
         case 'calendar': renderCalendar(); break;
@@ -88,7 +103,7 @@ const App = (() => {
         case 'settings': renderSettings(); break;
         default: location.hash = '#/home';
       }
-    });
+    }, 0);
   }
 
   // ═══ 首页渲染 ═══
@@ -233,13 +248,12 @@ const App = (() => {
     // 搜索
     const searchInput = document.getElementById('search-input');
     if (searchInput) {
-      searchInput.addEventListener('input', e => {
+      const _handleSearch = e => {
         const query = e.target.value;
         const taskList = document.getElementById('task-list');
         if (!taskList) return;
         const subjects = SubjectModule.getAll();
         if (!query || !query.trim()) {
-          // 清空搜索，恢复完整列表
           const today = DateUtils.today();
           const todayTasks = TaskModule.getTasksByDate(today);
           taskList.innerHTML = todayTasks.map(t => renderTaskCard(t, subjects)).join('');
@@ -251,13 +265,16 @@ const App = (() => {
         } else {
           taskList.innerHTML = '<div class="text-center py-6 text-stone-400 text-sm">未找到匹配的任务</div>';
         }
-      });
+      };
+      // 移除旧监听器避免重复绑定
+      searchInput.removeEventListener('input', _handleSearch);
+      searchInput.addEventListener('input', _handleSearch);
     }
 
     // 批量导入
     const batchImportBtn = document.getElementById('batch-import-btn');
     if (batchImportBtn) {
-      batchImportBtn.addEventListener('click', () => {
+      const _importClick = () => {
         Modal.show({
           title: '📥 批量导入任务',
           bodyHTML: `
@@ -282,6 +299,8 @@ const App = (() => {
               if (result.ok) {
                 Toast.success(`成功导入 ${result.added} 个任务`);
                 if (result.skipped > 0) Toast.warning(`跳过 ${result.skipped} 条无效数据`);
+                // 导入成功后刷新首页
+                if (currentPage === 'home') renderHome();
               } else {
                 Toast.error(result.msg);
               }
@@ -294,7 +313,9 @@ const App = (() => {
             }
           }
         });
-      });
+      };
+      batchImportBtn.removeEventListener('click', _importClick);
+      batchImportBtn.addEventListener('click', _importClick);
     }
 
     // 折叠
@@ -973,15 +994,27 @@ const App = (() => {
   }
 
   function bindSettingsEvents() {
-    // 添加科目
+    // 防御：清除之前绑定的事件钩子，防止重复绑定
+    const el = document.getElementById('page-settings');
+
+    // 添加科目 — 使用 onreplaceclick 模式防止重复绑定
     const addSubjectBtn = document.getElementById('add-subject-btn');
     if (addSubjectBtn) {
-      addSubjectBtn.addEventListener('click', () => {
+      const cloned = addSubjectBtn.cloneNode(true);
+      addSubjectBtn.parentNode.replaceChild(cloned, addSubjectBtn);
+      cloned.addEventListener('click', () => {
         const input = document.getElementById('new-subject-name');
-        if (input && input.value.trim()) {
+        if (!input || !input.value.trim()) {
+          Toast.warning('请输入科目名称');
+          return;
+        }
+        try {
           SubjectModule.add(input.value.trim());
+          input.value = '';
           Toast.success('科目添加成功');
           renderSettings();
+        } catch (e) {
+          Toast.error('科目添加失败：' + e.message);
         }
       });
     }
@@ -1353,7 +1386,7 @@ const App = (() => {
     });
   }
 
-  return { init, handleRoute, renderHome, renderCalendar, renderReview, renderSettings };
+  return { init, handleRoute, handleRouteDirect, renderHome, renderCalendar, renderReview, renderSettings };
 })();
 
 // ─── 批量导入解析函数 ───

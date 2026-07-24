@@ -131,30 +131,6 @@
   .nav-item.active i { transform: scale(1.1); }
   .nav-item:active { transform: scale(0.95); }
 
-  /* ═══ 悬浮新建按钮 ═══ */
-  .fab {
-    position: fixed;
-    bottom: 80px;
-    right: 16px;
-    width: 48px;
-    height: 48px;
-    border-radius: 50%;
-    background: linear-gradient(135deg, var(--color-primary), var(--color-primary-dark));
-    color: white;
-    border: none;
-    box-shadow: 0 4px 16px rgba(234, 140, 60, 0.35);
-    cursor: pointer;
-    z-index: 99;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 22px;
-    transition: all 0.25s ease;
-  }
-
-  .fab:hover { transform: scale(1.08); box-shadow: 0 6px 20px rgba(234, 140, 60, 0.45); }
-  .fab:active { transform: scale(0.92); }
-
   /* ═══ Toast 容器 ═══ */
   #toast-container {
     position: fixed;
@@ -282,11 +258,6 @@
     }
 
     .nav-item i { font-size: 18px; width: 22px; text-align: center; }
-
-    .fab {
-      bottom: 28px;
-      right: calc(50% - 460px);
-    }
   }
 
   @media (min-width: 1024px) {
@@ -294,9 +265,6 @@
       max-width: 1100px;
     }
     .bottom-nav { width: 220px; }
-    .fab {
-      right: calc(50% - 530px);
-    }
   }
 
   /* 滚动条美化 */
@@ -332,12 +300,6 @@
       width: 3.5rem !important;
       min-width: 3.5rem !important;
       max-width: 3.5rem !important;
-    }
-
-    /* 浮动按钮文字隐藏 */
-    .fab {
-      right: 12px;
-      bottom: 76px;
     }
 
     /* 防止任何元素超出屏幕 */
@@ -399,10 +361,6 @@
   </div>
 </div>
 
-<!-- 悬浮新建按钮 -->
-<button class="fab" id="fab-add" title="新建任务">
-  <i class="fa fa-plus"></i>
-</button>
 
 <!-- Toast 容器 -->
 <div id="toast-container"></div>
@@ -423,44 +381,6 @@
 
 <script>
 /* ═══ 全局事件绑定（在 App.init 之后执行） ═══ */
-
-// 悬浮按钮 - 新建任务
-document.getElementById('fab-add').addEventListener('click', () => {
-  Modal.show({
-    title: '📝 新建任务',
-    bodyHTML: `
-      <div class="space-y-3 text-left">
-        <div>
-          <label class="text-xs text-stone-500 block mb-1">科目</label>
-          <select id="new-task-subject" class="w-full px-3 py-2 text-sm border border-stone-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-300">
-            <option value="">选择科目</option>
-            ${SubjectModule.getAll().map(s => `<option value="${s.id}">${s.name}</option>`).join('')}
-          </select>
-        </div>
-        <div>
-          <label class="text-xs text-stone-500 block mb-1">日期</label>
-          <input type="date" id="new-task-date" value="${DateUtils.today()}" class="w-full px-3 py-2 text-sm border border-stone-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-300">
-        </div>
-        <div>
-          <label class="text-xs text-stone-500 block mb-1">任务内容</label>
-          <textarea id="new-task-content" rows="3" placeholder="今天要做什么？" class="w-full px-3 py-2 text-sm border border-stone-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-300 resize-none"></textarea>
-        </div>
-      </div>
-    `,
-    confirmText: '添加',
-    onConfirm: () => {
-      const subjectId = document.getElementById('new-task-subject').value;
-      const date = document.getElementById('new-task-date').value;
-      const content = document.getElementById('new-task-content').value;
-      const result = TaskModule.addTask({ subjectId, scheduledDate: date, content });
-      if (result.ok) {
-        Toast.success('任务已添加');
-      } else {
-        Toast.error(result.msg);
-      }
-    }
-  });
-});
 
 // 全局任务交互委托
 document.addEventListener('click', e => {

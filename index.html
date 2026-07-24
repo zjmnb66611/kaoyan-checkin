@@ -327,6 +327,7 @@
 </style>
 </head>
 <body>
+<script>if("serviceWorker"in navigator){navigator.serviceWorker.getRegistrations().then(function(regs){regs.forEach(function(r){r.unregister()})})}var scripts=document.querySelectorAll("script[src]");scripts.forEach(function(s){var u=new URL(s.src);u.searchParams.set("v",Date.now());s.src=u.toString()});</script>
 
 <div class="app-wrapper">
   <!-- ═══ PC 侧边导航 / 移动端底部导航 ═══ -->

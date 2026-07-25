@@ -22,7 +22,7 @@ const SubjectModule = (() => {
     const newSubject = {
       id: DateUtils.uuid(),
       name: trimmedName,
-      color: color || colors[subjects.length % colors.length],
+      color: Validate.isSafeColor(color) ? color : colors[subjects.length % colors.length],
       icon: 'fa-circle-thin',
       sortOrder: subjects.length,
       isPreset: false,

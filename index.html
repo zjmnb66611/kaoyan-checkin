@@ -2,32 +2,15 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>考研打卡 - 每日坚持，一战成硕</title>
 
-<!-- Tailwind CSS -->
-<script src="https://cdn.tailwindcss.com"></script>
-<script>
-  tailwind.config = {
-    theme: {
-      extend: {
-        colors: {
-          warm: {
-            50: '#fefce8',
-            100: '#fef9c3',
-            200: '#fef08a',
-            300: '#fde047',
-            400: '#facc15',
-            500: '#eab308',
-          }
-        }
-      }
-    }
-  }
-</script>
+<!-- Built Tailwind CSS -->
+<link rel="stylesheet" href="assets/app.css">
 
 <!-- Font Awesome -->
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css">
+<link rel="stylesheet" href="assets/vendor/font-awesome/4.7.0/css/font-awesome.min.css">
 
 <style>
   /* ═══ CSS 变量：暖色调色板 ═══ */
@@ -351,8 +334,6 @@
 </style>
 </head>
 <body>
-<script>if("serviceWorker"in navigator){navigator.serviceWorker.getRegistrations().then(function(regs){regs.forEach(function(r){r.unregister()})})}var scripts=document.querySelectorAll("script[src]");scripts.forEach(function(s){var u=new URL(s.src);u.searchParams.set("v",Date.now());s.src=u.toString()});</script>
-
 <div class="app-wrapper">
   <!-- ═══ PC 侧边导航 / 移动端底部导航 ═══ -->
   <nav class="bottom-nav" id="main-nav">
@@ -411,7 +392,7 @@
 <script src="js/modules/recurring.js"></script>
 <script src="js/modules/sync.js"></script>
 <script src="js/components/modal.js"></script>
-<script src="js/app.js?v=1784899831824"></script>
+<script src="js/app.js"></script>
 
 <script>
 /* ═══ 导航栏即时点击反馈（移动端优化） ═══ */
@@ -549,21 +530,15 @@ document.addEventListener('click', e => {
         }
       }),
       createMenuItem('📅 迁移日期', () => {
-        const newDate = prompt('请输入目标日期 (YYYY-MM-DD)：', DateUtils.today());
-        if (!newDate) return;
-        if (!Validate.isValidDate(newDate)) {
-          Toast.warning('\u8bf7\u8f93\u5165\u6709\u6548\u7684\u65e5\u671f');
-          return;
-        }
-        const result = TaskModule.updateTask(taskId, { scheduledDate: newDate });
-        if (!result.ok) {
-          Toast.warning(result.msg);
-        } else {
-          const suffix = result.task.scheduledDate !== newDate
-            ? '\uff0c\u5df2\u8c03\u6574\u81f3 ' + result.task.scheduledDate
-            : '';
-          Toast.success('\u4efb\u52a1\u5df2\u8fc1\u79fb' + suffix);
-        }
+        DatePicker.single({
+          title: '迁移任务日期',
+          value: task.scheduledDate,
+          onConfirm: newDate => {
+            const result = TaskModule.updateTask(taskId, { scheduledDate: newDate });
+            if (!result.ok) { Toast.warning(result.msg); return false; }
+            Toast.success('任务已迁移');
+          }
+        });
       }),
       createMenuItem('📝 打卡备注', () => {
         const note = prompt('请输入打卡备注：', task.checkinNote || '');
@@ -627,17 +602,15 @@ document.addEventListener('touchstart', e => {
         if (newContent && newContent.trim()) TaskModule.updateTask(taskId, { content: newContent.trim() });
       }),
       createMenuItem('📅 迁移日期', () => {
-        const newDate = prompt('目标日期 (YYYY-MM-DD)：', DateUtils.today());
-        if (!newDate) return;
-        if (!Validate.isValidDate(newDate)) {
-          Toast.warning('\u8bf7\u8f93\u5165\u6709\u6548\u7684\u65e5\u671f');
-          return;
-        }
-        const result = TaskModule.updateTask(taskId, { scheduledDate: newDate });
-        if (!result.ok) Toast.warning(result.msg);
-        else if (result.task.scheduledDate !== newDate) {
-          Toast.info('\u4f11\u606f\u65e5\u4efb\u52a1\u5df2\u8c03\u6574\u81f3 ' + result.task.scheduledDate);
-        }
+        DatePicker.single({
+          title: '迁移任务日期',
+          value: task.scheduledDate,
+          onConfirm: newDate => {
+            const result = TaskModule.updateTask(taskId, { scheduledDate: newDate });
+            if (!result.ok) { Toast.warning(result.msg); return false; }
+            Toast.success('任务已迁移');
+          }
+        });
       }),
       createMenuItem('🗑️ 删除任务', () => TaskModule.deleteTask(taskId), 'text-orange-500'),
     ]);

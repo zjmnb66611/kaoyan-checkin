@@ -17,6 +17,10 @@ const Validate = {
     return content && content.trim().length > 0 && content.trim().length <= 500;
   },
 
+  isSafeColor(color) {
+    return /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(color || '');
+  },
+
   sanitize(str) {
     if (!str) return '';
     return str.replace(/[<>]/g, c => c === '<' ? '&lt;' : '&gt;');

@@ -7,21 +7,26 @@ const App = (() => {
   let currentCalendarView = 'month';
   let currentCalendarDate = DateUtils.today();
 
-  function init() {
-    // 检查是否需要顺延昨日未完成任务
-    TaskModule.postponeUncompletedTasks(DateUtils.addDays(DateUtils.today(), -1));
+  function escapeText(value) {
+    return Validate.sanitizeHTML(String(value ?? ''));
+  }
 
+  function safeColor(value) {
+    return /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(value || '') ? value : '#a8a29e';
+  }
+
+  function init() {
     // 刷新周期性任务
     RecurringModule.refresh();
+
+    // 昨日有未完成任务时，后续待完成计划整体顺延一天。
+    TaskModule.postponeUncompletedTasks(DateUtils.addDays(DateUtils.today(), -1));
 
     // 统一处理已配置的休息日/请假日，确保后续计划按序后移且不会重复后移。
     RestModule.applyPostponement();
 
     // 更新打卡统计
     CheckinModule.updateCheckinStats();
-
-    // 启动云端自动同步
-    SyncModule.startAutoSync();
 
     // 路由监听
     window.addEventListener('hashchange', handleRoute);
@@ -132,6 +137,12 @@ const App = (() => {
       State.update('settings', { [key]: value });
       State.persist('settings');
       if (key === 'searchExpanded') renderGlobalSearch();
+      if (key === 'viewMode' || key === 'taskStyle') {
+        // 首页和日历会保留在 DOM 中；设置改变后主动刷新，切回时立即生效。
+        renderHome();
+        renderCalendar();
+        Toast.success(key === 'viewMode' ? '任务列表密度已更新' : '任务条目样式已更新');
+      }
       renderSettings();
     });
 
@@ -160,33 +171,28 @@ const App = (() => {
     });
 
     DOM.delegate(settingsEl, 'click', '#add-temp-rest-btn', function() {
-      const start = prompt('请输入起始日期 (YYYY-MM-DD)：', DateUtils.today());
-      if (!start) return;
-      const end = prompt('请输入结束日期（单日可留空）：', start) || start;
-      if (!Validate.isValidDate(start) || !Validate.isValidDate(end) || start > end) {
-        Toast.warning('请输入有效的日期范围');
-        return;
-      }
-      const result = RestModule.addTemporaryRest(start, end);
-      if (result.ok) {
-        Toast.success('临时休息日已添加');
-        renderSettings();
-      } else {
-        Toast.warning(result.msg);
-      }
+      DatePicker.range({
+        title: '添加临时休息日',
+        onConfirm: (start, end) => {
+          const result = RestModule.addTemporaryRest(start, end);
+          if (!result.ok) { Toast.warning(result.msg); return false; }
+          Toast.success('临时休息日已添加，后续计划已顺延');
+          renderSettings();
+        }
+      });
     });
 
     DOM.delegate(settingsEl, 'click', '#add-temp-rest-batch-btn', function() {
-      const raw = prompt('请输入多个日期，使用逗号分隔（YYYY-MM-DD）：', DateUtils.today());
-      if (!raw) return;
-      const dates = [...new Set(raw.split(/[,，\s]+/).map(d => d.trim()).filter(Boolean))];
-      if (dates.length === 0 || dates.some(d => !Validate.isValidDate(d))) {
-        Toast.warning('存在无效日期，请检查输入');
-        return;
-      }
-      dates.forEach(date => RestModule.addTemporaryRest(date, date));
-      Toast.success(`已新增 ${dates.length} 个临时休息日`);
-      renderSettings();
+      DatePicker.multiple({
+        title: '批量添加临时休息日',
+        onConfirm: dates => {
+          const results = dates.map(date => RestModule.addTemporaryRest(date, date));
+          const failed = results.find(result => !result.ok);
+          if (failed) { Toast.warning(failed.msg); return false; }
+          Toast.success(`已新增 ${dates.length} 个临时休息日，后续计划已顺延`);
+          renderSettings();
+        }
+      });
     });
 
     DOM.delegate(settingsEl, 'click', '.remove-temp-rest', function() {
@@ -202,20 +208,15 @@ const App = (() => {
     });
 
     DOM.delegate(settingsEl, 'click', '#add-leave-btn', function() {
-      const start = prompt('请输入请假起始日期 (YYYY-MM-DD)：', DateUtils.today());
-      if (!start) return;
-      const end = prompt('请输入请假结束日期：', start) || start;
-      if (!Validate.isValidDate(start) || !Validate.isValidDate(end) || start > end) {
-        Toast.warning('请输入有效的日期范围');
-        return;
-      }
-      const result = RestModule.addLeave(start, end);
-      if (result.ok) {
-        Toast.success('请假已记录，任务已顺延');
-        renderSettings();
-      } else {
-        Toast.warning(result.msg);
-      }
+      DatePicker.range({
+        title: '记录请假',
+        onConfirm: (start, end) => {
+          const result = RestModule.addLeave(start, end);
+          if (!result.ok) { Toast.warning(result.msg); return false; }
+          Toast.success('请假已记录，后续计划已顺延');
+          renderSettings();
+        }
+      });
     });
 
     DOM.delegate(settingsEl, 'click', '.revoke-leave', function() {
@@ -280,7 +281,7 @@ const App = (() => {
               <label class="text-xs text-stone-500 block mb-1">科目（可选）</label>
               <select id="recurring-subject" class="w-full px-3 py-2 text-sm border border-stone-200 rounded-xl">
                 <option value="">选择科目</option>
-                ${subjects.map(s => `<option value="${s.id}">${s.name}</option>`).join('')}
+                ${subjects.map(s => `<option value="${escapeText(s.id)}">${escapeText(s.name)}</option>`).join('')}
               </select>
             </div>
             <div>
@@ -361,7 +362,7 @@ const App = (() => {
           <div class="space-y-3 text-left">
             <select id="edit-recurring-subject" class="w-full px-3 py-2 text-sm border border-stone-200 rounded-xl">
               <option value="">选择科目</option>
-              ${subjects.map(s => `<option value="${s.id}" ${s.id === rule.subjectId ? 'selected' : ''}>${s.name}</option>`).join('')}
+              ${subjects.map(s => `<option value="${escapeText(s.id)}" ${s.id === rule.subjectId ? 'selected' : ''}>${escapeText(s.name)}</option>`).join('')}
             </select>
             <select id="edit-recurring-type" class="w-full px-3 py-2 text-sm border border-stone-200 rounded-xl">
               <option value="daily" ${rule.ruleType === 'daily' ? 'selected' : ''}>每日重复</option>
@@ -414,25 +415,6 @@ const App = (() => {
     DOM.delegate(settingsEl, 'click', '.delete-recurring', function() {
       RecurringModule.removeRule(this.dataset.id);
       Toast.success('重复任务已删除');
-      renderSettings();
-    });
-
-    DOM.delegate(settingsEl, 'click', '#login-btn', function() {
-      const username = document.getElementById('sync-username')?.value || '';
-      const password = document.getElementById('sync-password')?.value || '';
-      const result = SyncModule.login(username, password);
-      if (result.ok) { Toast.success(result.msg); renderSettings(); }
-      else { Toast.error(result.msg); }
-    });
-
-    DOM.delegate(settingsEl, 'click', '#sync-now-btn', function() {
-      SyncModule.syncAll();
-      Toast.success('数据同步完成');
-    });
-
-    DOM.delegate(settingsEl, 'click', '#logout-btn', function() {
-      SyncModule.logout();
-      Toast.success('已退出登录');
       renderSettings();
     });
 
@@ -599,7 +581,7 @@ const App = (() => {
              <span class="text-4xl font-black text-amber-600">${Math.max(0, daysUntilExam)}</span>
              <span class="text-stone-500 text-sm ml-2">天</span>
            </div>
-           <div class="text-center text-stone-400 text-xs mt-1">目标日期：${settings.examDate}</div>
+           <div class="text-center text-stone-400 text-xs mt-1">目标日期：${escapeText(settings.examDate)}</div>
          </div>`;
 
     // 各科进度
@@ -617,17 +599,17 @@ const App = (() => {
            ${subjectProgress.map(sp => `
              <div class="mt-2">
                <div class="flex justify-between text-xs text-stone-600 mb-1">
-                 <span>${sp.name}</span>
+                 <span>${escapeText(sp.name)}</span>
                  <span>${sp.rate}%</span>
                </div>
                <div class="w-full bg-stone-100 rounded-full h-1.5">
-                 <div class="h-1.5 rounded-full transition-all duration-500" style="width:${sp.rate}%;background-color:${sp.color}"></div>
+                 <div class="h-1.5 rounded-full transition-all duration-500" style="width:${sp.rate}%;background-color:${safeColor(sp.color)}"></div>
                </div>
              </div>
            `).join('')}
          </div>`;
 
-    const viewModeClass = settings.viewMode === 'compact' ? 'space-y-1' : 'space-y-3';
+    const viewModeClass = settings.viewMode === 'compact' ? 'space-y-1' : 'space-y-4';
 
     el.innerHTML = `
 	      <!-- 今日任务列表 -->
@@ -714,7 +696,7 @@ const App = (() => {
                 <label class="text-xs text-stone-500 block mb-1">科目（可选）</label>
                 <select id="fab-subject" class="w-full px-3 py-2 text-sm border border-stone-200 rounded-xl">
                   <option value="">选择科目</option>
-                  ${subjects.map(s => '<option value="' + s.id + '">' + s.name + '</option>').join('')}
+                  ${subjects.map(s => '<option value="' + escapeText(s.id) + '">' + escapeText(s.name) + '</option>').join('')}
                 </select>
               </div>
               <div>
@@ -748,22 +730,42 @@ const App = (() => {
     const batchImportBtn = document.getElementById('batch-import-btn');
     if (batchImportBtn) {
       const _importClick = () => {
+        const subjects = SubjectModule.getAll();
+        const subjectOptions = [
+          '<option value="">不指定科目</option>',
+          ...subjects.map(s => `<option value="${escapeText(s.id)}">${escapeText(s.name)}</option>`)
+        ].join('');
+
         Modal.show({
           title: '📥 批量导入任务',
           bodyHTML: `
             <div class="space-y-3 text-left">
-              <div>
-                <label class="text-xs text-stone-500 block mb-1">粘贴任务数据</label>
-                <textarea id="batch-import-text" rows="10" placeholder="随便粘贴，自动识别日期和任务：&#10;&#10;2026-07-25&#10;背50个单词&#10;做一套数学卷子&#10;&#10;2026-07-26&#10;【政治】复习马原第一章&#10;【英语】精读一篇阅读&#10;做课后习题" class="w-full px-3 py-2 text-sm border border-stone-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-300 resize-none font-mono text-xs"></textarea>
-                <p class="text-xs text-stone-400 mt-1">每段以<code>日期</code>开头，下面每行一个任务。科目用<code>【科目名】</code>标在任务前面就行了</p>
+              <div class="grid grid-cols-2 gap-2">
+                <div>
+                  <label class="text-xs text-stone-500 block mb-1">默认日期</label>
+                  <input type="date" id="batch-import-date" value="${DateUtils.today()}" class="w-full px-2.5 py-2 text-sm border border-stone-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-300">
+                </div>
+                <div>
+                  <label class="text-xs text-stone-500 block mb-1">默认科目</label>
+                  <select id="batch-import-subject" class="w-full px-2.5 py-2 text-sm border border-stone-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-300">
+                    ${subjectOptions}
+                  </select>
+                </div>
               </div>
+              <div>
+                <label class="text-xs text-stone-500 block mb-1">任务清单</label>
+                <textarea id="batch-import-text" rows="9" placeholder="背 50 个单词&#10;精读一篇阅读&#10;做一套数学卷子" class="w-full px-3 py-2 text-sm border border-stone-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-300 resize-none"></textarea>
+              </div>
+              <div id="batch-import-preview" class="rounded-lg bg-stone-50 px-3 py-2 text-xs text-stone-500" aria-live="polite">0 个待导入任务</div>
             </div>
           `,
           confirmText: '导入',
           onConfirm: () => {
             const rawText = document.getElementById('batch-import-text').value;
+            const defaultDate = document.getElementById('batch-import-date').value;
+            const defaultSubjectId = document.getElementById('batch-import-subject').value;
             try {
-              const result = importBatchTasks(rawText);
+              const result = importBatchTasks(rawText, { defaultDate, defaultSubjectId });
               if (result.ok) {
                 Toast.success('成功导入 ' + result.added + ' 个任务');
                 if (result.skipped > 0) Toast.warning('跳过 ' + result.skipped + ' 条无效数据');
@@ -778,6 +780,30 @@ const App = (() => {
             }
           }
         });
+
+        const updatePreview = () => {
+          const rawText = document.getElementById('batch-import-text').value;
+          const defaultDate = document.getElementById('batch-import-date').value;
+          const defaultSubjectId = document.getElementById('batch-import-subject').value;
+          const preview = previewBatchImport(rawText, { defaultDate, defaultSubjectId });
+          const previewEl = document.getElementById('batch-import-preview');
+          if (!previewEl) return;
+          if (!rawText.trim()) {
+            previewEl.textContent = '0 个待导入任务';
+            previewEl.className = 'rounded-lg bg-stone-50 px-3 py-2 text-xs text-stone-500';
+            return;
+          }
+          previewEl.textContent = preview.ok
+            ? `将导入 ${preview.tasks.length} 个任务${preview.skipped ? `，${preview.skipped} 行将跳过` : ''}`
+            : '没有可导入的有效任务';
+          previewEl.className = preview.ok
+            ? 'rounded-lg bg-emerald-50 px-3 py-2 text-xs text-emerald-700'
+            : 'rounded-lg bg-orange-50 px-3 py-2 text-xs text-orange-600';
+        };
+
+        document.getElementById('batch-import-text').addEventListener('input', updatePreview);
+        document.getElementById('batch-import-date').addEventListener('change', updatePreview);
+        document.getElementById('batch-import-subject').addEventListener('change', updatePreview);
       };
       batchImportBtn.removeEventListener('click', _importClick);
       batchImportBtn.addEventListener('click', _importClick);
@@ -875,16 +901,15 @@ const App = (() => {
     const migrateBtn = document.getElementById('batch-migrate');
     if (migrateBtn) migrateBtn.addEventListener('click', () => {
       if (batchSelected.size === 0) { Toast.warning('请先选择任务'); return; }
-      const targetDate = prompt('目标日期 (YYYY-MM-DD)：', DateUtils.today());
-      if (!targetDate) return;
-      if (!Validate.isValidDate(targetDate)) {
-        Toast.warning('\u8bf7\u8f93\u5165\u6709\u6548\u7684\u65e5\u671f');
-        return;
-      }
-      const result = TaskModule.batchMigrate([...batchSelected], targetDate);
-      if (!result.ok) { Toast.warning(result.msg); return; }
-      Toast.success(`已迁移 ${batchSelected.size} 个任务至 ${result.targetDate || targetDate}`);
-      exitBatchMode();
+      DatePicker.single({
+        title: '批量迁移日期',
+        onConfirm: targetDate => {
+          const result = TaskModule.batchMigrate([...batchSelected], targetDate);
+          if (!result.ok) { Toast.warning(result.msg); return false; }
+          Toast.success(`已迁移 ${batchSelected.size} 个任务至 ${result.targetDate || targetDate}`);
+          exitBatchMode();
+        }
+      });
     });
 
     // 批量改科目
@@ -892,7 +917,7 @@ const App = (() => {
     if (subjectBtn) subjectBtn.addEventListener('click', () => {
       if (batchSelected.size === 0) { Toast.warning('请先选择任务'); return; }
       const subjects = SubjectModule.getAll();
-      const options = subjects.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
+      const options = subjects.map(s => `<option value="${escapeText(s.id)}">${escapeText(s.name)}</option>`).join('');
       Modal.show({
         title: '📚 批量修改科目',
         bodyHTML: `<select id="batch-subject-select" class="w-full px-3 py-2 text-sm border border-stone-200 rounded-xl">${options}</select>`,
@@ -926,7 +951,7 @@ const App = (() => {
   function renderTaskList(tasks, subjects, emptyHTML) {
     if (tasks.length === 0) return emptyHTML;
     if (tasks.length <= 50) return tasks.map(t => renderTaskCard(t, subjects, { animate: true })).join('');
-    const rowHeight = 78;
+    const rowHeight = State.get('settings').viewMode === 'compact' ? 68 : 96;
     return `<div class="task-virtual-list" data-row-height="${rowHeight}">
       <div class="task-virtual-spacer" style="height:${tasks.length * rowHeight}px">
         <div class="task-virtual-content"></div>
@@ -963,7 +988,7 @@ const App = (() => {
 
   function renderTaskCard(task, subjects, options = {}) {
     const sub = subjects.find(s => s.id === task.subjectId);
-    const subColor = sub ? sub.color : '#a8a29e';
+    const subColor = sub ? safeColor(sub.color) : '#a8a29e';
     const subName = sub ? Validate.sanitizeHTML(sub.name) : '';
     const isCompleted = task.status === 'completed';
     const settings = State.get('settings');
@@ -978,7 +1003,7 @@ const App = (() => {
       ${isCompleted ? '<i class="fa fa-check text-white text-xs"></i>' : ''}
     </div>`;
 
-    const contentClass = settings.viewMode === 'compact' ? 'py-2.5' : 'py-4';
+    const contentClass = settings.viewMode === 'compact' ? 'py-2' : 'py-5';
     const animationClass = options.animate === false ? '' : 'task-card-enter';
     const cardClass = `task-card ${animationClass} bg-white rounded-xl border ${isCompleted ? 'border-emerald-100 bg-emerald-50/30' : 'border-stone-100'} ${contentClass} flex items-center gap-3 px-3 transition-all duration-300 hover:shadow-sm`;
 
@@ -1240,7 +1265,7 @@ const App = (() => {
           const settings = State.get('settings');
           detail.innerHTML = `
             <div class="text-sm font-bold text-stone-700 mb-2">📋 ${date} ${DateUtils.getDayName(date)} (${tasks.length}个任务)</div>
-            <div class="${settings.viewMode === 'compact' ? 'space-y-1' : 'space-y-2'}">
+            <div class="${settings.viewMode === 'compact' ? 'space-y-1' : 'space-y-4'}">
               ${tasks.map(t => renderTaskCard(t, subjects)).join('')}
             </div>
           `;
@@ -1282,9 +1307,9 @@ const App = (() => {
           <div class="text-xs font-medium text-stone-600 mb-2">各科完成情况</div>
           ${report.subjectProgress.filter(sp => sp.total > 0).map(sp => `
             <div class="flex items-center gap-2 mb-2">
-              <span class="text-xs text-stone-500 review-subject-label truncate">${sp.name}</span>
+              <span class="text-xs text-stone-500 review-subject-label truncate">${escapeText(sp.name)}</span>
               <div class="flex-1 bg-stone-100 rounded-full h-1.5">
-                <div class="h-1.5 rounded-full" style="width:${sp.rate}%;background-color:${sp.color}"></div>
+                <div class="h-1.5 rounded-full" style="width:${sp.rate}%;background-color:${safeColor(sp.color)}"></div>
               </div>
               <span class="text-xs text-stone-400 w-10 text-right">${sp.rate}%</span>
             </div>
@@ -1329,6 +1354,22 @@ const App = (() => {
     const weeklyRest = RestModule.getWeeklyRestDays();
     const tempRests = RestModule.getRestDays().filter(r => r.type === 'temporary');
     const leaves = RestModule.getLeaves().filter(l => !l.isRevoked);
+    const previewTask = {
+      id: 'settings-display-preview',
+      subjectId: '',
+      content: '示例任务：完成一篇英语阅读',
+      status: 'pending',
+      deleted: false,
+      checkinNote: ''
+    };
+    const displayPreview = `
+      <div class="mt-3 pt-3 border-t border-stone-100 pointer-events-none" aria-label="任务条目样式预览">
+        <div class="text-xs text-stone-400 mb-2">效果预览</div>
+        <div class="${settings.viewMode === 'compact' ? 'space-y-1' : 'space-y-4'}">
+          ${renderTaskCard(previewTask, [], { animate: false })}
+          ${renderTaskCard({ ...previewTask, id: 'settings-display-preview-2', content: '示例任务：整理数学错题' }, [], { animate: false })}
+        </div>
+      </div>`;
 
     const dayNames = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
 
@@ -1341,13 +1382,13 @@ const App = (() => {
           <h3 class="font-bold text-stone-800 text-sm mb-3">📚 科目管理</h3>
           <div id="subject-list" class="space-y-1 mb-3">
             ${subjects.map(s => `
-              <div class="flex items-center gap-2 text-sm py-1.5 px-1 rounded-lg cursor-move hover:bg-stone-50 transition-all subject-drag-item" data-subject-id="${s.id}" draggable="true">
+              <div class="flex items-center gap-2 text-sm py-1.5 px-1 rounded-lg cursor-move hover:bg-stone-50 transition-all subject-drag-item" data-subject-id="${escapeText(s.id)}" draggable="true">
                 <span class="cursor-grab text-stone-300"><i class="fa fa-bars text-xs"></i></span>
-                <span class="w-3 h-3 rounded-full flex-shrink-0" style="background-color:${s.color}"></span>
-                <span class="flex-1 text-stone-700 truncate">${s.name}</span>
+                <span class="w-3 h-3 rounded-full flex-shrink-0" style="background-color:${safeColor(s.color)}"></span>
+                <span class="flex-1 text-stone-700 truncate">${escapeText(s.name)}</span>
                 ${s.isPreset ? '<span class="text-[10px] text-stone-400 flex-shrink-0">预置</span>' : ''}
-                <button class="text-xs text-stone-400 hover:text-amber-600 flex-shrink-0 rename-subject" data-id="${s.id}">重命名</button>
-                ${s.isPreset ? '' : `<button class="text-xs text-orange-400 hover:text-orange-600 flex-shrink-0 delete-subject" data-id="${s.id}">删除</button>`}
+                <button class="text-xs text-stone-400 hover:text-amber-600 flex-shrink-0 rename-subject" data-id="${escapeText(s.id)}">重命名</button>
+                ${s.isPreset ? '' : `<button class="text-xs text-orange-400 hover:text-orange-600 flex-shrink-0 delete-subject" data-id="${escapeText(s.id)}">删除</button>`}
               </div>
             `).join('')}
           </div>
@@ -1361,7 +1402,7 @@ const App = (() => {
         <div class="bg-white rounded-2xl border border-stone-100 p-4 shadow-sm">
           <h3 class="font-bold text-stone-800 text-sm mb-3">🔄 任务顺延规则</h3>
           <div class="flex items-center justify-between cursor-pointer" id="postpone-toggle">
-            <span class="text-sm text-stone-600">未完成任务自动顺延至次日</span>
+            <span class="text-sm text-stone-600">未完成时，后续计划整体顺延一天</span>
             <div class="relative pointer-events-none">
               <input type="checkbox" id="auto-postpone" style="position:absolute;opacity:0;pointer-events:none;width:0;height:0" ${settings.autoPostpone ? 'checked' : ''}>
               <div class="toggle-bg w-11 h-6 rounded-full transition-all ${settings.autoPostpone ? 'bg-amber-400' : 'bg-stone-300'}"></div>
@@ -1388,6 +1429,7 @@ const App = (() => {
                 <button class="settings-choice flex-1 px-3 py-2 rounded-lg border text-xs transition-all ${settings.taskStyle === 'checkbox-right' ? 'bg-amber-100 border-amber-300 text-amber-700' : 'border-stone-200 text-stone-500'}" data-setting="taskStyle" data-value="checkbox-right">勾选框居右</button>
               </div>
             </div>
+            ${displayPreview}
             <div class="flex items-center justify-between">
               <span class="text-stone-600">每日 ${settings.breakWarningTime || '22:00'} 断卡预警</span>
               <label class="relative inline-flex items-center cursor-pointer">
@@ -1455,7 +1497,7 @@ const App = (() => {
         <!-- 考研日期 -->
         <div class="bg-white rounded-2xl border border-stone-100 p-4 shadow-sm">
           <h3 class="font-bold text-stone-800 text-sm mb-3">🗓️ 考研日期</h3>
-          <input type="date" id="exam-date-input" value="${settings.examDate}" class="w-full px-3 py-2 text-sm border border-stone-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-300">
+          <input type="date" id="exam-date-input" value="${escapeText(settings.examDate)}" class="w-full px-3 py-2 text-sm border border-stone-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-300">
         </div>
         <!-- 周期性重复任务 -->
         <div class="bg-white rounded-2xl border border-stone-100 p-4 shadow-sm">
@@ -1467,8 +1509,8 @@ const App = (() => {
               return `
                 <div class="flex items-center justify-between text-sm py-1.5 px-1 rounded-lg hover:bg-stone-50">
                   <div class="flex-1 min-w-0">
-                    <span class="text-stone-700 truncate block">${r.content}</span>
-                    <span class="text-[10px] text-stone-400">${typeLabel}${sub ? ' · ' + sub.name : ''} ${r.enabled ? '' : '(已暂停)'}</span>
+                    <span class="text-stone-700 truncate block">${escapeText(r.content)}</span>
+                    <span class="text-[10px] text-stone-400">${typeLabel}${sub ? ' · ' + escapeText(sub.name) : ''} ${r.enabled ? '' : '(已暂停)'}</span>
                   </div>
                   <div class="flex gap-1 flex-shrink-0">
                     <button class="text-xs px-2 py-1 rounded-lg bg-blue-50 text-blue-500 edit-recurring" data-id="${r.id}">编辑</button>
@@ -1484,31 +1526,10 @@ const App = (() => {
           </div>
         </div>
 
-        <!-- 云端同步 -->
+        <!-- 数据存储 -->
         <div class="bg-white rounded-2xl border border-stone-100 p-4 shadow-sm">
-          <h3 class="font-bold text-stone-800 text-sm mb-3">☁️ 云端同步</h3>
-          ${SyncModule.isLoggedIn()
-            ? `<div class="space-y-2">
-                <div class="flex items-center gap-2 text-sm">
-                  <span class="w-8 h-8 rounded-full bg-amber-100 flex items-center justify-center text-amber-600 font-bold">${SyncModule.getCurrentUser().username.charAt(0).toUpperCase()}</span>
-                  <span class="text-stone-700 font-medium">${SyncModule.getCurrentUser().username}</span>
-                  <span class="text-[10px] text-emerald-500 bg-emerald-50 px-1.5 py-0.5 rounded-full">已登录</span>
-                </div>
-                <div class="flex gap-2">
-                  <button id="sync-now-btn" class="text-xs px-3 py-1.5 bg-amber-100 text-amber-700 rounded-lg hover:bg-amber-200 transition-all">🔄 立即同步</button>
-                  <button id="logout-btn" class="text-xs px-3 py-1.5 bg-stone-100 text-stone-500 rounded-lg hover:bg-stone-200 transition-all">退出登录</button>
-                </div>
-              </div>`
-            : `<div class="space-y-2">
-                <p class="text-xs text-stone-400 mb-2">登录后可将数据同步到云端，支持多设备访问</p>
-                <div class="flex gap-2">
-                  <input type="text" id="sync-username" placeholder="用户名" class="flex-1 px-3 py-2 text-sm border border-stone-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-300">
-                  <input type="password" id="sync-password" placeholder="密码" class="flex-1 px-3 py-2 text-sm border border-stone-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-300">
-                </div>
-                <p class="text-[10px] text-stone-400">首次输入即自动注册，之后用相同账号登录即可</p>
-                <button id="login-btn" class="w-full py-2 bg-amber-500 text-white text-sm rounded-xl hover:bg-amber-600 transition-all active:scale-95">登录 / 注册</button>
-              </div>`
-          }
+          <h3 class="font-bold text-stone-800 text-sm mb-2">💾 本地数据</h3>
+          <p class="text-xs text-stone-500">当前数据仅保存在此浏览器。接入安全的认证和数据库服务后，才能启用跨设备同步。</p>
         </div>
 
         <!-- 重置 -->
@@ -1634,100 +1655,100 @@ const App = (() => {
 })();
 
 // ─── 批量导入解析函数 ───
-function importBatchTasks(rawText) {
-  if (!rawText || !rawText.trim()) return { ok: false, msg: '请输入任务数据' };
-
-  const subjects = SubjectModule.getAll();
-  const subjectMap = {};
-  subjects.forEach(s => { subjectMap[s.name] = s.id; });
-
-  const taskList = [];
-  let skipped = 0;
-
-  // 按空行或换行分割，每段是"一个日期的多个任务"
-  const blocks = rawText.trim().split(/\n\s*\n/);
-
-  blocks.forEach(block => {
-    const lines = block.trim().split('\n').filter(l => l.trim());
-    if (lines.length === 0) return;
-
-    // 第一行：提取日期（支持任意格式：2026-07-25、20260725、0725、7.25、7/25 等）
-    const firstLine = lines[0].trim();
-    let date = null;
-
-    // 尝试从行首提取日期
-    const dateStr = firstLine.replace(/[.。、\s]/g, '-').replace(/[\/]/g, '-');
-
-    // 匹配各种日期格式
-    let match = dateStr.match(/(\d{4})[-/]?(\d{1,2})[-/]?(\d{1,2})/);
-    if (!match) {
-      // 试试只有月日的格式：如 0725, 7-25
-      match = dateStr.match(/^(\d{1,2})[-/]?(\d{1,2})$/);
-      if (match) {
-        const now = new Date();
-        const year = now.getFullYear();
-        const month = parseInt(match[1]);
-        const day = parseInt(match[2]);
-        if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
-          date = year + '-' + String(month).padStart(2, '0') + '-' + String(day).padStart(2, '0');
-        }
-      } else {
-        // 试试纯数字：如 0829, 20260725
-        match = dateStr.match(/^(\d{4})(\d{2})(\d{2})$/);
-        if (!match) match = dateStr.match(/^(\d{2})(\d{2})$/);
-        if (match) {
-          const groups = match.slice(1).filter(Boolean);
-          if (groups.length === 2) {
-            const m2 = parseInt(groups[0]), d2 = parseInt(groups[1]);
-            if (m2 >= 1 && m2 <= 12 && d2 >= 1 && d2 <= 31) {
-              date = new Date().getFullYear() + '-' + String(m2).padStart(2, '0') + '-' + String(d2).padStart(2, '0');
-            }
-          } else if (groups.length === 3) {
-            date = groups[0] + '-' + String(parseInt(groups[1])).padStart(2, '0') + '-' + String(parseInt(groups[2])).padStart(2, '0');
-          }
-        }
-      }
-    } else {
-      date = match[1] + '-' + String(parseInt(match[2])).padStart(2, '0') + '-' + String(parseInt(match[3])).padStart(2, '0');
-    }
-
-    if (!date || !Validate.isValidDate(date)) { skipped += lines.length; return; }
-
-    // 解析每行任务
-    lines.forEach(line => {
-      // 去掉行首的日期（如果重复出现）
-      let content = line.trim();
-      // 移除常见的序号前缀：1. 2) - 等
-      content = content.replace(/^\d+[.)、\s]+/, '');
-      // 移除日期前缀（如果有）
-      content = content.replace(/^\d{4}[-/]\d{1,2}[-/]\d{1,2}[,\s，\s]*/, '');
-
-      // 智能分离科目：如果行首有【英语】或 [政治] 或「数学分析」等括号包裹的内容
-      let subjectId = '';
-      const bracketMatch = content.match(/^[【\[「《](.+?)[】\]」》]\s*/);
-      if (bracketMatch) {
-        const subjectName = bracketMatch[1];
-        content = content.substring(bracketMatch[0].length);
-        if (subjectMap[subjectName]) {
-          subjectId = subjectMap[subjectName];
-        } else {
-          const matched = subjects.find(s => s.name.includes(subjectName) || subjectName.includes(s.name));
-          if (matched) subjectId = matched.id;
-        }
-      }
-
-      if (!content || !Validate.isValidTask(content)) { skipped++; return; }
-
-      taskList.push({ subjectId, content, scheduledDate: date });
-    });
-  });
-
-  if (taskList.length === 0) {
-    return { ok: false, msg: '没有可导入的有效数据' };
+function parseBatchImportDate(value) {
+  const raw = String(value || '').trim().replace(/[年月.。/]/g, '-').replace(/日/g, '');
+  const year = Number(DateUtils.today().slice(0, 4));
+  let match = raw.match(/^(\d{4})-?(\d{1,2})-?(\d{1,2})$/);
+  if (match) {
+    const date = `${match[1]}-${String(Number(match[2])).padStart(2, '0')}-${String(Number(match[3])).padStart(2, '0')}`;
+    return Validate.isValidDate(date) ? date : null;
   }
 
-  const result = TaskModule.addTaskBatch(taskList);
-  result.skipped = skipped;
+  match = raw.match(/^(\d{1,2})-(\d{1,2})$/) || raw.match(/^(\d{2})(\d{2})$/);
+  if (!match) return null;
+  const date = `${year}-${String(Number(match[1])).padStart(2, '0')}-${String(Number(match[2])).padStart(2, '0')}`;
+  return Validate.isValidDate(date) ? date : null;
+}
+
+function findImportSubjectId(subjectName, subjects) {
+  const name = String(subjectName || '').trim();
+  if (!name) return '';
+  const exact = subjects.find(s => s.id === name || s.name === name);
+  if (exact) return exact.id;
+  const similar = subjects.find(s => s.name.includes(name) || name.includes(s.name));
+  return similar ? similar.id : '';
+}
+
+function previewBatchImport(rawText, options = {}) {
+  const subjects = SubjectModule.getAll();
+  const defaultDate = Validate.isValidDate(options.defaultDate) ? options.defaultDate : DateUtils.today();
+  const defaultSubjectId = subjects.some(s => s.id === options.defaultSubjectId) ? options.defaultSubjectId : '';
+  const tasks = [];
+  let skipped = 0;
+  let activeDate = defaultDate;
+
+  String(rawText || '').replace(/\r\n?/g, '\n').split('\n').forEach(rawLine => {
+    let line = rawLine.trim();
+    if (!line) return;
+
+    const dateHeader = parseBatchImportDate(line.replace(/[：:]+$/, ''));
+    if (dateHeader) {
+      activeDate = dateHeader;
+      return;
+    }
+
+    const columns = line.split(/[|｜]/).map(part => part.trim());
+    let subjectId = defaultSubjectId;
+    let content = line;
+
+    if (columns.length >= 3) {
+      const lineDate = parseBatchImportDate(columns[0]);
+      if (lineDate) activeDate = lineDate;
+      subjectId = findImportSubjectId(columns[1], subjects) || defaultSubjectId;
+      content = columns.slice(2).join(' | ');
+    } else if (columns.length === 2) {
+      const lineDate = parseBatchImportDate(columns[0]);
+      const lineSubjectId = findImportSubjectId(columns[0], subjects);
+      if (lineDate) {
+        activeDate = lineDate;
+        content = columns[1];
+      } else if (lineSubjectId) {
+        subjectId = lineSubjectId;
+        content = columns[1];
+      }
+    }
+
+    content = content.replace(/^\s*(?:[-*+•]|\d+[.)、])\s*/, '');
+    const tag = content.match(/^[【\[「《]([^】\]」》]+)[】\]」》]\s*/);
+    if (tag) {
+      const taggedSubjectId = findImportSubjectId(tag[1], subjects);
+      if (taggedSubjectId) {
+        subjectId = taggedSubjectId;
+        content = content.slice(tag[0].length);
+      }
+    }
+
+    if (!Validate.isValidTask(content)) {
+      skipped++;
+      return;
+    }
+    tasks.push({ subjectId, content: content.trim(), scheduledDate: activeDate });
+  });
+
+  return {
+    ok: tasks.length > 0,
+    tasks,
+    skipped,
+    msg: tasks.length > 0 ? '' : '没有可导入的有效任务'
+  };
+}
+
+function importBatchTasks(rawText, options = {}) {
+  const preview = previewBatchImport(rawText, options);
+  if (!preview.ok) return { ok: false, msg: preview.msg, skipped: preview.skipped };
+
+  const result = TaskModule.addTaskBatch(preview.tasks);
+  result.skipped = preview.skipped;
   return result;
 }
 

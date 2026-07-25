@@ -16,6 +16,7 @@ const RestModule = (() => {
   // 周期性周休息日
   function setWeeklyRestDays(daysOfWeek, enabled = true) {
     // daysOfWeek: [0,6] 0=周日
+    const previousRestDates = getEffectiveRestDates();
     let restDays = getRestDays();
     const existing = restDays.find(r => r.type === 'weekly');
     if (existing) {
@@ -33,6 +34,8 @@ const RestModule = (() => {
     State.set('restDays', restDays);
     State.persist('restDays');
     _invalidateCaches();
+    const currentRestDates = new Set(getEffectiveRestDates());
+    restoreTasksForRemovedOffDates(previousRestDates.filter(date => !currentRestDates.has(date)));
     applyRestDayPostponement();
     document.dispatchEvent(new CustomEvent('task:changed'));
     return { ok: true };
@@ -67,20 +70,28 @@ const RestModule = (() => {
   }
 
   function removeTemporaryRest(id) {
-    let restDays = getRestDays();
-    restDays = restDays.filter(r => r.id !== id);
-    State.set('restDays', restDays);
+    const restDays = getRestDays();
+    const removedRest = restDays.find(r => r.id === id && r.type === 'temporary');
+    if (!removedRest) return { ok: false, msg: '临时休息日不存在' };
+
+    const remainingRestDays = restDays.filter(r => r.id !== id);
+    State.set('restDays', remainingRestDays);
     State.persist('restDays');
     _invalidateCaches();
+    restoreTasksForRemovedOffDates(getDatesInRange(removedRest.startDate, removedRest.endDate || removedRest.startDate));
     document.dispatchEvent(new CustomEvent('task:changed'));
     return { ok: true };
   }
 
   function cancelAllTemporaryRests() {
-    const restDays = getRestDays().filter(r => r.type !== 'temporary');
-    State.set('restDays', restDays);
+    const restDays = getRestDays();
+    const removedDates = restDays
+      .filter(r => r.type === 'temporary')
+      .flatMap(r => getDatesInRange(r.startDate, r.endDate || r.startDate));
+    State.set('restDays', restDays.filter(r => r.type !== 'temporary'));
     State.persist('restDays');
     _invalidateCaches();
+    restoreTasksForRemovedOffDates(removedDates);
     document.dispatchEvent(new CustomEvent('task:changed'));
     return { ok: true };
   }
@@ -134,34 +145,7 @@ const RestModule = (() => {
     _invalidateCaches();
 
     if (restoreMode === 'restore_original') {
-      const tasks = State.get('tasks') || [];
-      const leaveDates = [];
-      let restoreDate = leave.startDate;
-      while (restoreDate <= leave.endDate) {
-        leaveDates.push(restoreDate);
-        restoreDate = DateUtils.addDays(restoreDate, 1);
-      }
-
-      // 只撤回本次请假独有的顺延。若同一天仍被其他休息日或请假覆盖，
-      // 该日期的顺延仍应保留，避免撤销一条记录影响另一条有效规则。
-      const activeOffDates = new Set([
-        ...getEffectiveRestDates(),
-        ...getEffectiveLeaveDates()
-      ]);
-      const reversibleDates = new Set(leaveDates.filter(date => !activeOffDates.has(date)));
-
-      tasks.forEach(task => {
-        if (task.deleted || task.status !== 'pending' || reversibleDates.size === 0) return;
-        const markers = task.postponedByOffDates || [];
-        const reversedCount = markers.filter(date => reversibleDates.has(date)).length;
-        if (reversedCount === 0) return;
-
-        task.scheduledDate = DateUtils.addDays(task.scheduledDate, -reversedCount);
-        task.postponedByOffDates = markers.filter(date => !reversibleDates.has(date));
-        task.updatedAt = DateUtils.nowISO();
-      });
-      State.set('tasks', tasks);
-      State.persist('tasks');
+      restoreTasksForRemovedOffDates(getDatesInRange(leave.startDate, leave.endDate));
     }
     // keep_postponed: 不做任何改动
 
@@ -181,6 +165,7 @@ const RestModule = (() => {
     dates.forEach(offDate => {
       tasks
         .filter(task => task.scheduledDate >= offDate && task.status === 'pending' && !task.deleted)
+        .filter(task => !task.isUserScheduledOnOffDay)
         .filter(task => !(task.postponedByOffDates || []).includes(offDate))
         .sort((a, b) => a.scheduledDate.localeCompare(b.scheduledDate) || a.createdAt.localeCompare(b.createdAt))
         .forEach(task => {
@@ -191,6 +176,47 @@ const RestModule = (() => {
         });
     });
 
+    return changed;
+  }
+
+  function getDatesInRange(startDate, endDate) {
+    const dates = [];
+    let current = startDate;
+    while (current <= endDate) {
+      dates.push(current);
+      current = DateUtils.addDays(current, 1);
+    }
+    return dates;
+  }
+
+  // 取消休息日或还原请假时，只撤回不再被其他有效规则覆盖的顺延。
+  function restoreTasksForRemovedOffDates(removedDates) {
+    const activeOffDates = new Set([
+      ...getEffectiveRestDates(),
+      ...getEffectiveLeaveDates()
+    ]);
+    const reversibleDates = new Set(
+      [...new Set(removedDates)].filter(date => date >= DateUtils.today() && !activeOffDates.has(date))
+    );
+    if (reversibleDates.size === 0) return false;
+
+    const tasks = State.get('tasks') || [];
+    let changed = false;
+    tasks.forEach(task => {
+      if (task.deleted || task.status !== 'pending') return;
+      const markers = task.postponedByOffDates || [];
+      const reversedCount = markers.filter(date => reversibleDates.has(date)).length;
+      if (reversedCount === 0) return;
+
+      task.scheduledDate = DateUtils.addDays(task.scheduledDate, -reversedCount);
+      task.postponedByOffDates = markers.filter(date => !reversibleDates.has(date));
+      task.updatedAt = DateUtils.nowISO();
+      changed = true;
+    });
+    if (changed) {
+      State.set('tasks', tasks);
+      State.persist('tasks');
+    }
     return changed;
   }
 
@@ -239,8 +265,7 @@ const RestModule = (() => {
       ? settings.examDate
       : DateUtils.addDays(today, 365);
     const to = endDate || defaultEnd;
-    // 用 today 和 restDays/leaves 长度做简单缓存键，避免同一天内反复重算
-    const cacheKey = from + '|' + to + '|' + getRestDays().filter(r => r.enabled).length + '|' + getLeaves().filter(l => !l.isRevoked).length;
+    const cacheKey = from + '|' + to + '|' + JSON.stringify(getRestDays()) + '|' + JSON.stringify(getLeaves());
     if (_restDatesCache && _restDatesCacheKey === cacheKey) return _restDatesCache;
 
     const restDays = getRestDays().filter(r => r.enabled);
@@ -276,7 +301,7 @@ const RestModule = (() => {
   let _leaveDatesCacheKey = '';
 
   function getEffectiveLeaveDates() {
-    const cacheKey = DateUtils.today() + '|' + getLeaves().filter(l => !l.isRevoked).length;
+    const cacheKey = DateUtils.today() + '|' + JSON.stringify(getLeaves());
     if (_leaveDatesCache && _leaveDatesCacheKey === cacheKey) return _leaveDatesCache;
 
     const leaves = getLeaves().filter(l => !l.isRevoked);

@@ -19,8 +19,9 @@ const TaskModule = (() => {
 
   function normalizeScheduledDate(date) {
     if (!Validate.isValidDate(date)) return null;
-    if (date < DateUtils.today() || !RestModule.isRestDay(date)) return date;
-    return DateUtils.getNextWorkday(date, RestModule.getEffectiveRestDates(), RestModule.getEffectiveLeaveDates()) || date;
+    // 手动创建、导入和迁移任务时，用户明确选择的日期优先。
+    // 休息日只在设置休息日时顺延已有任务，避免“添加今日任务”被静默移到未来日期。
+    return date;
   }
 
   function addTask({ subjectId, content, scheduledDate, source = 'manual', recurringRuleId = null }) {
@@ -36,6 +37,7 @@ const TaskModule = (() => {
       content: content.trim(),
       scheduledDate: normalizedDate,
       originalDate: requestedDate,
+      isUserScheduledOnOffDay: source === 'manual' && RestModule.isRestDay(normalizedDate),
       status: 'pending',
       checkinNote: '',
       isCheckinBackfill: false,
@@ -67,6 +69,7 @@ const TaskModule = (() => {
           content: item.content.trim(),
           scheduledDate: normalizedDate,
           originalDate: requestedDate,
+          isUserScheduledOnOffDay: (item.source || 'manual') === 'manual' && RestModule.isRestDay(normalizedDate),
           status: 'pending',
           checkinNote: '',
           isCheckinBackfill: false,
@@ -96,6 +99,7 @@ const TaskModule = (() => {
       const normalizedDate = normalizeScheduledDate(safeUpdates.scheduledDate);
       if (!normalizedDate) return { ok: false, msg: '任务日期无效' };
       safeUpdates.scheduledDate = normalizedDate;
+      safeUpdates.isUserScheduledOnOffDay = RestModule.isRestDay(normalizedDate);
     }
     tasks[idx] = { ...tasks[idx], ...safeUpdates, updatedAt: DateUtils.nowISO() };
     State.set('tasks', tasks);
@@ -146,7 +150,11 @@ const TaskModule = (() => {
     const tasks = _getRaw();
     ids.forEach(id => {
       const t = tasks.find(t => t.id === id);
-      if (t) { t.scheduledDate = normalizedDate; t.updatedAt = DateUtils.nowISO(); }
+      if (t) {
+        t.scheduledDate = normalizedDate;
+        t.isUserScheduledOnOffDay = RestModule.isRestDay(normalizedDate);
+        t.updatedAt = DateUtils.nowISO();
+      }
     });
     State.set('tasks', tasks);
     State.persist('tasks');
@@ -166,24 +174,30 @@ const TaskModule = (() => {
     return { ok: true };
   }
 
-  // 当日未完成任务自动顺延
+  // 某日有未完成任务时，后续待完成计划整体后移一天。
+  // 使用日期标记保证同一遗漏日期只处理一次，避免重复刷新持续后移。
   function postponeUncompletedTasks(dateStr) {
     const settings = State.get('settings');
     if (!settings.autoPostpone) return;
 
     const tasks = _getRaw();
-    const today = dateStr || DateUtils.today();
-    const restDates = RestModule.getEffectiveRestDates();
-    const leaveDates = RestModule.getEffectiveLeaveDates();
-    const nextWorkday = DateUtils.getNextWorkday(today, restDates, leaveDates);
-    if (!nextWorkday) return;
+    const overdueDate = dateStr || DateUtils.addDays(DateUtils.today(), -1);
+    const hasUncompletedTask = tasks.some(task =>
+      task.scheduledDate === overdueDate && task.status === 'pending' && !task.deleted
+    );
+    if (!hasUncompletedTask) return;
 
-    const uncompleted = tasks.filter(t => t.scheduledDate === today && t.status === 'pending' && !t.deleted);
     let changed = false;
-    uncompleted.forEach(t => {
-      t.scheduledDate = nextWorkday;
-      t.updatedAt = DateUtils.nowISO();
-      changed = true;
+    tasks
+      .filter(task => task.scheduledDate >= overdueDate && task.status === 'pending' && !task.deleted)
+      .filter(task => !(task.postponedByAutoPostponeDates || []).includes(overdueDate))
+      .forEach(task => {
+        task.scheduledDate = DateUtils.addDays(task.scheduledDate, 1);
+        task.postponedByAutoPostponeDates = [
+          ...new Set([...(task.postponedByAutoPostponeDates || []), overdueDate])
+        ];
+        task.updatedAt = DateUtils.nowISO();
+        changed = true;
     });
 
     if (changed) {

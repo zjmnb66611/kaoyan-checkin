@@ -185,3 +185,92 @@ const Modal = {
     this.show({ title, body, onConfirm, confirmText, cancelText, showCancel: true });
   }
 };
+
+// 统一使用原生日历控件，避免在移动端手动输入 YYYY-MM-DD。
+const DatePicker = {
+  single({ title, value = DateUtils.today(), confirmText = '确定', onConfirm }) {
+    Modal.show({
+      title,
+      bodyHTML: `<label class="block text-xs text-stone-500 mb-1" for="date-picker-value">日期</label>
+        <input id="date-picker-value" type="date" value="${value}" class="w-full px-3 py-2.5 border border-stone-200 rounded-lg text-sm">`,
+      confirmText,
+      onConfirm: () => {
+        const date = document.getElementById('date-picker-value')?.value;
+        if (!Validate.isValidDate(date)) { Toast.warning('请选择有效日期'); return false; }
+        return onConfirm ? onConfirm(date) : undefined;
+      }
+    });
+  },
+
+  range({ title, start = DateUtils.today(), end = start, confirmText = '确定', onConfirm }) {
+    Modal.show({
+      title,
+      bodyHTML: `<div class="grid grid-cols-2 gap-3">
+          <label class="block text-xs text-stone-500">开始日期
+            <input id="date-range-start" type="date" value="${start}" class="mt-1 w-full px-3 py-2.5 border border-stone-200 rounded-lg text-sm">
+          </label>
+          <label class="block text-xs text-stone-500">结束日期
+            <input id="date-range-end" type="date" value="${end}" class="mt-1 w-full px-3 py-2.5 border border-stone-200 rounded-lg text-sm">
+          </label>
+        </div>`,
+      confirmText,
+      onConfirm: () => {
+        const startDate = document.getElementById('date-range-start')?.value;
+        const endDate = document.getElementById('date-range-end')?.value;
+        if (!Validate.isValidDate(startDate) || !Validate.isValidDate(endDate) || startDate > endDate) {
+          Toast.warning('请选择有效的日期范围');
+          return false;
+        }
+        return onConfirm ? onConfirm(startDate, endDate) : undefined;
+      }
+    });
+  },
+
+  multiple({ title, initialDates = [], confirmText = '添加', onConfirm }) {
+    const selectedDates = new Set(initialDates.filter(date => Validate.isValidDate(date)));
+    const renderSelectedDates = () => {
+      const host = document.getElementById('multiple-date-list');
+      if (!host) return;
+      const dates = [...selectedDates].sort();
+      host.innerHTML = dates.length
+        ? dates.map(date => `<button type="button" class="remove-multiple-date px-2 py-1 rounded-lg bg-amber-50 text-amber-700 text-xs" data-date="${date}">${date} <span aria-hidden="true">x</span></button>`).join('')
+        : '<span class="text-xs text-stone-400">尚未选择日期</span>';
+      host.querySelectorAll('.remove-multiple-date').forEach(button => {
+        button.addEventListener('click', () => {
+          selectedDates.delete(button.dataset.date);
+          renderSelectedDates();
+        });
+      });
+    };
+
+    Modal.show({
+      title,
+      bodyHTML: `<div class="space-y-3">
+          <div class="flex gap-2">
+            <input id="multiple-date-value" type="date" value="${DateUtils.today()}" class="min-w-0 flex-1 px-3 py-2.5 border border-stone-200 rounded-lg text-sm">
+            <button type="button" id="add-multiple-date" class="px-3 py-2 rounded-lg bg-amber-100 text-amber-800 text-sm">加入</button>
+          </div>
+          <div id="multiple-date-list" class="flex flex-wrap gap-2"></div>
+        </div>`,
+      confirmText,
+      onConfirm: () => {
+        const dates = [...selectedDates].sort();
+        if (dates.length === 0) { Toast.warning('请至少选择一个日期'); return false; }
+        return onConfirm ? onConfirm(dates) : undefined;
+      }
+    });
+
+    setTimeout(() => {
+      const addButton = document.getElementById('add-multiple-date');
+      const input = document.getElementById('multiple-date-value');
+      if (addButton && input) {
+        addButton.addEventListener('click', () => {
+          if (!Validate.isValidDate(input.value)) { Toast.warning('请选择有效日期'); return; }
+          selectedDates.add(input.value);
+          renderSelectedDates();
+        });
+      }
+      renderSelectedDates();
+    }, 0);
+  }
+};

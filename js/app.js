@@ -1246,6 +1246,16 @@ const App = (() => {
     if (pt) pt.onclick = function() {
       var cb = document.getElementById('auto-postpone');
       cb.checked = !cb.checked;
+
+      // 同步更新视觉 toggle 样式（避免仅更新隐藏 checkbox 导致视觉无反馈）
+      var toggleBg = pt.querySelector('.toggle-bg');
+      var toggleDot = pt.querySelector('.toggle-dot');
+      if (toggleBg) {
+        toggleBg.classList.toggle('bg-amber-400', cb.checked);
+        toggleBg.classList.toggle('bg-stone-300', !cb.checked);
+      }
+      if (toggleDot) toggleDot.classList.toggle('translate-x-5', cb.checked);
+
       cb.dispatchEvent(new Event('change', {bubbles: true}));
     };
 

@@ -17,15 +17,25 @@ const TaskModule = (() => {
     return getTasks().filter(t => t.subjectId === subjectId);
   }
 
+  function normalizeScheduledDate(date) {
+    if (!Validate.isValidDate(date)) return null;
+    if (date < DateUtils.today() || !RestModule.isRestDay(date)) return date;
+    return DateUtils.getNextWorkday(date, RestModule.getEffectiveRestDates(), RestModule.getEffectiveLeaveDates()) || date;
+  }
+
   function addTask({ subjectId, content, scheduledDate, source = 'manual', recurringRuleId = null }) {
     if (!Validate.isValidTask(content)) return { ok: false, msg: '任务内容不能为空' };
+
+    const requestedDate = scheduledDate || DateUtils.today();
+    const normalizedDate = normalizeScheduledDate(requestedDate);
+    if (!normalizedDate) return { ok: false, msg: '任务日期无效' };
 
     const task = {
       id: DateUtils.uuid(),
       subjectId: subjectId || '',
       content: content.trim(),
-      scheduledDate: scheduledDate || DateUtils.today(),
-      originalDate: scheduledDate || DateUtils.today(),
+      scheduledDate: normalizedDate,
+      originalDate: requestedDate,
       status: 'pending',
       checkinNote: '',
       isCheckinBackfill: false,
@@ -48,13 +58,15 @@ const TaskModule = (() => {
     const tasks = _getRaw();
     let added = 0;
     taskList.forEach(item => {
-      if (Validate.isValidTask(item.content)) {
+      const requestedDate = item.scheduledDate || DateUtils.today();
+      const normalizedDate = normalizeScheduledDate(requestedDate);
+      if (Validate.isValidTask(item.content) && normalizedDate) {
         tasks.push({
           id: DateUtils.uuid(),
           subjectId: item.subjectId || '',
           content: item.content.trim(),
-          scheduledDate: item.scheduledDate || DateUtils.today(),
-          originalDate: item.scheduledDate || DateUtils.today(),
+          scheduledDate: normalizedDate,
+          originalDate: requestedDate,
           status: 'pending',
           checkinNote: '',
           isCheckinBackfill: false,
@@ -80,6 +92,11 @@ const TaskModule = (() => {
     // 防止意外覆盖 id
     const safeUpdates = { ...updates };
     delete safeUpdates.id;
+    if (Object.prototype.hasOwnProperty.call(safeUpdates, 'scheduledDate')) {
+      const normalizedDate = normalizeScheduledDate(safeUpdates.scheduledDate);
+      if (!normalizedDate) return { ok: false, msg: '任务日期无效' };
+      safeUpdates.scheduledDate = normalizedDate;
+    }
     tasks[idx] = { ...tasks[idx], ...safeUpdates, updatedAt: DateUtils.nowISO() };
     State.set('tasks', tasks);
     State.persist('tasks');
@@ -124,15 +141,17 @@ const TaskModule = (() => {
   }
 
   function batchMigrate(ids, targetDate) {
+    const normalizedDate = normalizeScheduledDate(targetDate);
+    if (!normalizedDate) return { ok: false, msg: '目标日期无效' };
     const tasks = _getRaw();
     ids.forEach(id => {
       const t = tasks.find(t => t.id === id);
-      if (t) { t.scheduledDate = targetDate; t.updatedAt = DateUtils.nowISO(); }
+      if (t) { t.scheduledDate = normalizedDate; t.updatedAt = DateUtils.nowISO(); }
     });
     State.set('tasks', tasks);
     State.persist('tasks');
     document.dispatchEvent(new CustomEvent('task:changed'));
-    return { ok: true };
+    return { ok: true, targetDate: normalizedDate };
   }
 
   function batchChangeSubject(ids, subjectId) {

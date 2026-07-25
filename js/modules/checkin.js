@@ -7,9 +7,13 @@ const CheckinModule = (() => {
     if (!task) return { ok: false, msg: '任务不存在' };
 
     const newStatus = task.status === 'completed' ? 'pending' : 'completed';
+    if (newStatus === 'completed' && task.scheduledDate < DateUtils.today() && !task.isCheckinBackfill) {
+      return backfillCheckin(taskId);
+    }
+    // 历史任务必须经过补卡入口，统一执行每周一次的补卡限制。
     const result = TaskModule.updateTask(taskId, {
       status: newStatus,
-      isCheckinBackfill: task.scheduledDate !== DateUtils.today()
+      isCheckinBackfill: newStatus === 'pending' ? false : !!task.isCheckinBackfill
     });
 
     if (result.ok) {

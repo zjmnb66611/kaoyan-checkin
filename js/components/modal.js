@@ -106,8 +106,9 @@ const Modal = {
       className: `px-5 py-2.5 rounded-xl text-white text-sm font-medium transition-all duration-200 active:scale-95 ${type === 'motivation' ? 'bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600' : 'bg-amber-600 hover:bg-amber-700'}`,
       textContent: confirmText,
       onClick: () => {
-        if (onConfirm) onConfirm();
-        this.close();
+        // 回调返回 false 表示校验未通过，保留弹窗让用户修正输入。
+        const result = onConfirm ? onConfirm() : undefined;
+        if (result !== false) this.close();
       }
     });
     btnGroup.appendChild(confirmBtn);

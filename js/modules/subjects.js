@@ -14,10 +14,14 @@ const SubjectModule = (() => {
 
   function add(name, color) {
     const subjects = State.get('subjects');
+    const trimmedName = (name || '').trim();
+    if (!trimmedName || trimmedName.length > 30) {
+      return { ok: false, msg: '科目名称长度应为 1-30 个字符' };
+    }
     const colors = ['#E07B5A','#C0392B','#2980B9','#8E44AD','#16A085','#E67E22','#2C3E50','#D4A017'];
     const newSubject = {
       id: DateUtils.uuid(),
-      name: name.trim(),
+      name: trimmedName,
       color: color || colors[subjects.length % colors.length],
       icon: 'fa-circle-thin',
       sortOrder: subjects.length,
@@ -36,9 +40,12 @@ const SubjectModule = (() => {
     const subjects = State.get('subjects');
     const sub = subjects.find(s => s.id === id);
     if (!sub) return { ok: false, msg: '科目不存在' };
-    sub.name = newName.trim();
+    const trimmedName = (newName || '').trim();
+    if (!trimmedName || trimmedName.length > 30) return { ok: false, msg: '科目名称长度应为 1-30 个字符' };
+    sub.name = trimmedName;
     State.set('subjects', subjects);
     State.persist('subjects');
+    document.dispatchEvent(new CustomEvent('task:changed'));
     return { ok: true };
   }
 
@@ -67,6 +74,7 @@ const SubjectModule = (() => {
     });
     State.set('subjects', subjects);
     State.persist('subjects');
+    document.dispatchEvent(new CustomEvent('task:changed'));
     return { ok: true };
   }
 

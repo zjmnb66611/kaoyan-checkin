@@ -7,13 +7,21 @@ const RecurringModule = (() => {
   }
 
   function addRule({ subjectId, content, ruleType, weekDays, startDate }) {
+    const trimmedContent = (content || '').trim();
+    const normalizedWeekDays = [...new Set((weekDays || []).map(Number))]
+      .filter(day => Number.isInteger(day) && day >= 0 && day <= 6);
+    if (!trimmedContent) return { ok: false, msg: '任务内容不能为空' };
+    if (!Validate.isValidDate(startDate || DateUtils.today())) return { ok: false, msg: '开始日期无效' };
+    if (ruleType === 'weekly' && normalizedWeekDays.length === 0) {
+      return { ok: false, msg: '每周重复任务至少选择一天' };
+    }
     const rules = State.get('recurringRules');
     const rule = {
       id: DateUtils.uuid(),
       subjectId: subjectId || '',
-      content: content.trim(),
-      ruleType, // 'daily' | 'weekly'
-      weekDays: weekDays || [], // [0-6], only for weekly
+      content: trimmedContent,
+      ruleType: ruleType === 'weekly' ? 'weekly' : 'daily',
+      weekDays: normalizedWeekDays, // [0-6], only for weekly
       startDate: startDate || DateUtils.today(),
       enabled: true,
       createdAt: DateUtils.nowISO(),
@@ -32,6 +40,8 @@ const RecurringModule = (() => {
     const rules = State.get('recurringRules');
     const rule = rules.find(r => r.id === id);
     if (!rule) return { ok: false };
+    removeFutureTasksByRule(id);
+    // 删除规则时同步清理该规则生成的未来未完成任务，避免留下无法管理的孤儿任务。
     rule.deleted = true;
     State.set('recurringRules', rules);
     State.persist('recurringRules');
@@ -58,13 +68,43 @@ const RecurringModule = (() => {
     return { ok: true };
   }
 
-  // 为一条规则生成未来 90 天的任务
+  function updateRule(id, updates) {
+    const rules = State.get('recurringRules');
+    const rule = rules.find(item => item.id === id && !item.deleted);
+    if (!rule) return { ok: false, msg: '重复任务不存在' };
+    const content = (updates.content || '').trim();
+    if (!content) return { ok: false, msg: '任务内容不能为空' };
+    if (updates.startDate && !Validate.isValidDate(updates.startDate)) {
+      return { ok: false, msg: '开始日期无效' };
+    }
+    if (updates.ruleType === 'weekly' && (!updates.weekDays || updates.weekDays.length === 0)) {
+      return { ok: false, msg: '每周重复任务至少选择一天' };
+    }
+
+    rule.subjectId = updates.subjectId || '';
+    rule.content = content;
+    rule.ruleType = updates.ruleType === 'weekly' ? 'weekly' : 'daily';
+    rule.weekDays = [...new Set((updates.weekDays || []).map(Number))]
+      .filter(day => Number.isInteger(day) && day >= 0 && day <= 6);
+    rule.startDate = updates.startDate || rule.startDate;
+    rule.updatedAt = DateUtils.nowISO();
+    State.set('recurringRules', rules);
+    State.persist('recurringRules');
+
+    removeFutureTasksByRule(id);
+    generateTasksForRule(rule);
+    document.dispatchEvent(new CustomEvent('task:changed'));
+    return { ok: true, rule };
+  }
+
+  // 为一条规则生成截至考研日期的任务
   function generateTasksForRule(rule) {
     if (!rule.enabled) return;
 
     const today = DateUtils.today();
     const startFrom = rule.startDate > today ? rule.startDate : today;
-    const endDate = DateUtils.addDays(today, 90);
+    const examDate = State.get('settings').examDate;
+    const endDate = examDate && examDate >= today ? examDate : DateUtils.addDays(today, 90);
     const restDates = new Set(RestModule.getEffectiveRestDates());
     const leaveDates = new Set(RestModule.getEffectiveLeaveDates());
     const allOff = new Set([...restDates, ...leaveDates]);
@@ -107,7 +147,7 @@ const RecurringModule = (() => {
 
   // 删除某规则生成的未来未完成任务
   function removeFutureTasksByRule(ruleId) {
-    const tasks = TaskModule.getTasks();
+    const tasks = State.get('tasks') || [];
     const today = DateUtils.today();
     let changed = false;
 
@@ -129,7 +169,8 @@ const RecurringModule = (() => {
   function dailyRefresh() {
     const rules = getRules().filter(r => r.enabled);
     const today = DateUtils.today();
-    const endDate = DateUtils.addDays(today, 90);
+    const examDate = State.get('settings').examDate;
+    const endDate = examDate && examDate >= today ? examDate : DateUtils.addDays(today, 90);
     const restDates = new Set(RestModule.getEffectiveRestDates());
     const leaveDates = new Set(RestModule.getEffectiveLeaveDates());
     const allOff = new Set([...restDates, ...leaveDates]);
@@ -169,5 +210,26 @@ const RecurringModule = (() => {
     });
   }
 
-  return { getRules, addRule, removeRule, toggleRule, dailyRefresh };
+  function refresh() {
+    const today = DateUtils.today();
+    const examDate = State.get('settings').examDate;
+    const endDate = examDate && examDate >= today ? examDate : DateUtils.addDays(today, 90);
+    const tasks = State.get('tasks') || [];
+    let changed = false;
+    tasks.forEach(task => {
+      if (task.recurringRuleId && task.scheduledDate > endDate &&
+          task.scheduledDate >= today && task.status === 'pending' && !task.deleted) {
+        task.deleted = true;
+        task.updatedAt = DateUtils.nowISO();
+        changed = true;
+      }
+    });
+    if (changed) {
+      State.set('tasks', tasks);
+      State.persist('tasks');
+    }
+    dailyRefresh();
+  }
+
+  return { getRules, addRule, updateRule, removeRule, toggleRule, dailyRefresh, refresh };
 })();

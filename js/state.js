@@ -82,7 +82,11 @@ const State = (() => {
             console.warn('State: 数据形状异常，已重置 ' + k, parsed);
             return;
           }
-          _state[k] = parsed;
+          if (k === 'settings' || k === 'checkinStats') {
+            _state[k] = { ..._state[k], ...parsed };
+          } else {
+            _state[k] = parsed;
+          }
         } catch (e) { /* 解析失败，保留默认值 */ }
       }
     });

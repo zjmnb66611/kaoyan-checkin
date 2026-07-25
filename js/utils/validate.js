@@ -8,8 +8,9 @@ const Validate = {
 
   isValidDate(str) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(str)) return false;
-    const d = new Date(str);
-    return !isNaN(d.getTime());
+    const [year, month, day] = str.split('-').map(Number);
+    const d = new Date(year, month - 1, day);
+    return d.getFullYear() === year && d.getMonth() === month - 1 && d.getDate() === day;
   },
 
   isValidTask(content) {

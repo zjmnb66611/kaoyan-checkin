@@ -12,7 +12,10 @@ const App = (() => {
     TaskModule.postponeUncompletedTasks(DateUtils.addDays(DateUtils.today(), -1));
 
     // 刷新周期性任务
-    RecurringModule.dailyRefresh();
+    RecurringModule.refresh();
+
+    // 统一处理已配置的休息日/请假日，确保后续计划按序后移且不会重复后移。
+    RestModule.applyPostponement();
 
     // 更新打卡统计
     CheckinModule.updateCheckinStats();
@@ -22,6 +25,8 @@ const App = (() => {
 
     // 路由监听
     window.addEventListener('hashchange', handleRoute);
+    renderGlobalSearch();
+    _setupGlobalSearchDelegates();
     handleRoute();
 
     // 断卡预警定时检查
@@ -90,11 +95,55 @@ const App = (() => {
         body: '删除后该科目下的任务将保留但不再显示科目标签，确认删除？',
         confirmText: '删除',
         onConfirm: () => {
-          SubjectModule.remove(btn.dataset.id);
-          Toast.success('科目已删除');
-          renderSettings();
+          const result = SubjectModule.remove(btn.dataset.id);
+          if (result.ok) {
+            Toast.success('科目已删除');
+            renderSettings();
+          } else {
+            Toast.warning(result.msg);
+          }
         }
       });
+    });
+
+    DOM.delegate(settingsEl, 'click', '.rename-subject', function() {
+      const subject = SubjectModule.getById(this.dataset.id);
+      if (!subject) return;
+      const newName = prompt('请输入新的科目名称：', subject.name);
+      if (newName === null) return;
+      const trimmedName = newName.trim();
+      if (!trimmedName) {
+        Toast.warning('科目名称不能为空');
+        return;
+      }
+      const result = SubjectModule.rename(subject.id, trimmedName);
+      if (result.ok) {
+        Toast.success('科目名称已更新');
+        renderSettings();
+      } else {
+        Toast.error(result.msg);
+      }
+    });
+
+    DOM.delegate(settingsEl, 'click', '.settings-choice', function() {
+      const key = this.dataset.setting;
+      let value = this.dataset.value;
+      if (key === 'searchExpanded') value = value === 'true';
+      State.update('settings', { [key]: value });
+      State.persist('settings');
+      if (key === 'searchExpanded') renderGlobalSearch();
+      renderSettings();
+    });
+
+    DOM.delegate(settingsEl, 'change', '#break-warning', function() {
+      State.update('settings', { breakWarning: this.checked });
+      State.persist('settings');
+    });
+
+    DOM.delegate(settingsEl, 'change', '#break-warning-time', function() {
+      if (!/^([01]\\d|2[0-3]):[0-5]\\d$/.test(this.value)) return;
+      State.update('settings', { breakWarningTime: this.value });
+      State.persist('settings');
     });
 
     DOM.delegate(settingsEl, 'click', '.weekly-rest-btn', function() {
@@ -114,8 +163,29 @@ const App = (() => {
       const start = prompt('请输入起始日期 (YYYY-MM-DD)：', DateUtils.today());
       if (!start) return;
       const end = prompt('请输入结束日期（单日可留空）：', start) || start;
-      RestModule.addTemporaryRest(start, end);
-      Toast.success('临时休息日已添加');
+      if (!Validate.isValidDate(start) || !Validate.isValidDate(end) || start > end) {
+        Toast.warning('请输入有效的日期范围');
+        return;
+      }
+      const result = RestModule.addTemporaryRest(start, end);
+      if (result.ok) {
+        Toast.success('临时休息日已添加');
+        renderSettings();
+      } else {
+        Toast.warning(result.msg);
+      }
+    });
+
+    DOM.delegate(settingsEl, 'click', '#add-temp-rest-batch-btn', function() {
+      const raw = prompt('请输入多个日期，使用逗号分隔（YYYY-MM-DD）：', DateUtils.today());
+      if (!raw) return;
+      const dates = [...new Set(raw.split(/[,，\s]+/).map(d => d.trim()).filter(Boolean))];
+      if (dates.length === 0 || dates.some(d => !Validate.isValidDate(d))) {
+        Toast.warning('存在无效日期，请检查输入');
+        return;
+      }
+      dates.forEach(date => RestModule.addTemporaryRest(date, date));
+      Toast.success(`已新增 ${dates.length} 个临时休息日`);
       renderSettings();
     });
 
@@ -125,13 +195,27 @@ const App = (() => {
       renderSettings();
     });
 
+    DOM.delegate(settingsEl, 'click', '#cancel-all-temp-rest-btn', function() {
+      RestModule.cancelAllTemporaryRests();
+      Toast.success('临时休息日已全部取消');
+      renderSettings();
+    });
+
     DOM.delegate(settingsEl, 'click', '#add-leave-btn', function() {
       const start = prompt('请输入请假起始日期 (YYYY-MM-DD)：', DateUtils.today());
       if (!start) return;
       const end = prompt('请输入请假结束日期：', start) || start;
-      RestModule.addLeave(start, end);
-      Toast.success('请假已记录，任务已顺延');
-      renderSettings();
+      if (!Validate.isValidDate(start) || !Validate.isValidDate(end) || start > end) {
+        Toast.warning('请输入有效的日期范围');
+        return;
+      }
+      const result = RestModule.addLeave(start, end);
+      if (result.ok) {
+        Toast.success('请假已记录，任务已顺延');
+        renderSettings();
+      } else {
+        Toast.warning(result.msg);
+      }
     });
 
     DOM.delegate(settingsEl, 'click', '.revoke-leave', function() {
@@ -231,9 +315,11 @@ const App = (() => {
           document.querySelectorAll('.recurring-day-btn.bg-amber-400').forEach(btn2 => {
             weekDays.push(parseInt(btn2.dataset.day));
           });
-          if (!content.trim()) { Toast.error('请输入任务内容'); return; }
-          if (ruleType === 'weekly' && weekDays.length === 0) { Toast.error('请选择至少一天'); return; }
-          RecurringModule.addRule({ subjectId, content, ruleType, weekDays, startDate });
+          if (!content.trim()) { Toast.error('请输入任务内容'); return false; }
+          if (!Validate.isValidDate(startDate)) { Toast.error('请选择有效的开始日期'); return false; }
+          if (ruleType === 'weekly' && weekDays.length === 0) { Toast.error('请选择至少一天'); return false; }
+          const result = RecurringModule.addRule({ subjectId, content, ruleType, weekDays, startDate });
+          if (!result.ok) { Toast.error(result.msg); return false; }
           Toast.success('重复任务已创建');
           renderSettings();
         }
@@ -264,6 +350,67 @@ const App = (() => {
       renderSettings();
     });
 
+    DOM.delegate(settingsEl, 'click', '.edit-recurring', function() {
+      const rule = RecurringModule.getRules().find(item => item.id === this.dataset.id);
+      if (!rule) return;
+      const subjects = SubjectModule.getAll();
+      const dayNames = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+      Modal.show({
+        title: '编辑重复任务',
+        bodyHTML: `
+          <div class="space-y-3 text-left">
+            <select id="edit-recurring-subject" class="w-full px-3 py-2 text-sm border border-stone-200 rounded-xl">
+              <option value="">选择科目</option>
+              ${subjects.map(s => `<option value="${s.id}" ${s.id === rule.subjectId ? 'selected' : ''}>${s.name}</option>`).join('')}
+            </select>
+            <select id="edit-recurring-type" class="w-full px-3 py-2 text-sm border border-stone-200 rounded-xl">
+              <option value="daily" ${rule.ruleType === 'daily' ? 'selected' : ''}>每日重复</option>
+              <option value="weekly" ${rule.ruleType === 'weekly' ? 'selected' : ''}>每周固定日期</option>
+            </select>
+            <div id="edit-recurring-weekdays" class="${rule.ruleType === 'weekly' ? '' : 'hidden'} flex flex-wrap gap-1.5">
+              ${dayNames.map((name, idx) => `
+                <button class="edit-recurring-day-btn px-2 py-1 rounded-full text-xs border transition-all ${rule.weekDays.includes(idx) ? 'bg-amber-400 text-white border-amber-400' : 'border-stone-200 text-stone-500'}" data-day="${idx}">${name}</button>
+              `).join('')}
+            </div>
+            <input type="date" id="edit-recurring-start-date" value="${rule.startDate}" class="w-full px-3 py-2 text-sm border border-stone-200 rounded-xl">
+            <textarea id="edit-recurring-content" rows="2" class="w-full px-3 py-2 text-sm border border-stone-200 rounded-xl resize-none">${Validate.sanitizeHTML(rule.content)}</textarea>
+          </div>
+        `,
+        confirmText: '保存',
+        onConfirm: () => {
+          const ruleType = document.getElementById('edit-recurring-type').value;
+          const weekDays = [...document.querySelectorAll('.edit-recurring-day-btn.bg-amber-400')]
+            .map(btn => parseInt(btn.dataset.day));
+          const result = RecurringModule.updateRule(rule.id, {
+            subjectId: document.getElementById('edit-recurring-subject').value,
+            ruleType,
+            weekDays,
+            startDate: document.getElementById('edit-recurring-start-date').value,
+            content: document.getElementById('edit-recurring-content').value
+          });
+          if (result.ok) {
+            Toast.success('重复任务已更新');
+            renderSettings();
+          } else {
+            Toast.error(result.msg);
+            return false;
+          }
+        }
+      });
+      setTimeout(() => {
+        const type = document.getElementById('edit-recurring-type');
+        const weekdays = document.getElementById('edit-recurring-weekdays');
+        type?.addEventListener('change', () => weekdays?.classList.toggle('hidden', type.value === 'daily'));
+        document.querySelectorAll('.edit-recurring-day-btn').forEach(btn => btn.addEventListener('click', () => {
+          btn.classList.toggle('bg-amber-400');
+          btn.classList.toggle('text-white');
+          btn.classList.toggle('border-amber-400');
+          btn.classList.toggle('border-stone-200');
+          btn.classList.toggle('text-stone-500');
+        }));
+      }, 100);
+    });
+
     DOM.delegate(settingsEl, 'click', '.delete-recurring', function() {
       RecurringModule.removeRule(this.dataset.id);
       Toast.success('重复任务已删除');
@@ -292,11 +439,83 @@ const App = (() => {
     DOM.delegate(settingsEl, 'change', '#auto-postpone', function() {
       State.update('settings', { autoPostpone: this.checked });
       State.persist('settings');
+      if (this.checked) {
+        TaskModule.postponeUncompletedTasks(DateUtils.addDays(DateUtils.today(), -1));
+        Toast.success('\u81ea\u52a8\u987a\u5ef6\u5df2\u5f00\u542f');
+      }
     });
     DOM.delegate(settingsEl, 'change', '#exam-date-input', function() {
+      if (this.value && !Validate.isValidDate(this.value)) {
+        Toast.warning('\u8bf7\u8f93\u5165\u6709\u6548\u7684\u8003\u7814\u65e5\u671f');
+        this.value = State.get('settings').examDate;
+        return;
+      }
       State.update('settings', { examDate: this.value });
       State.persist('settings');
+      RecurringModule.refresh();
       Toast.success('考研日期已更新');
+    });
+  }
+
+  let _globalSearchDelegatesDone = false;
+  function renderGlobalSearch() {
+    const host = document.getElementById('global-search-host');
+    if (!host) return;
+    const expanded = !!State.get('settings').searchExpanded;
+    host.innerHTML = expanded
+      ? `<div class="relative">
+           <i class="fa fa-search absolute left-3 top-1/2 -translate-y-1/2 text-stone-400 text-sm"></i>
+           <input type="search" id="global-search-input" autocomplete="off" placeholder="搜索任务内容或打卡备注..."
+             class="w-full pl-9 pr-4 py-2.5 bg-white border border-stone-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-amber-300 focus:border-amber-300 transition-all">
+         </div>
+         <div id="global-search-results" class="hidden mt-2 bg-white border border-stone-100 rounded-xl shadow-sm overflow-hidden"></div>`
+      : `<button id="global-search-expand-btn" class="w-full flex items-center gap-2 px-3 py-2.5 bg-white border border-stone-200 rounded-xl text-sm text-stone-400 text-left hover:bg-stone-50 transition-all">
+           <i class="fa fa-search"></i><span>搜索任务...</span>
+         </button>`;
+  }
+
+  function renderGlobalSearchResults(query) {
+    const panel = document.getElementById('global-search-results');
+    if (!panel) return;
+    const trimmed = (query || '').trim();
+    if (!trimmed) {
+      panel.classList.add('hidden');
+      panel.innerHTML = '';
+      return;
+    }
+
+    const results = TaskModule.searchTasks(trimmed).slice(0, 30);
+    panel.classList.remove('hidden');
+    panel.innerHTML = results.length > 0
+      ? results.map(task => `
+          <button class="global-search-result w-full text-left px-3 py-2.5 border-b border-stone-50 last:border-b-0 hover:bg-stone-50 transition-all" data-date="${task.scheduledDate}">
+            <div class="text-sm text-stone-700 truncate">${Validate.sanitizeHTML(task.content)}</div>
+            <div class="text-xs text-stone-400 mt-0.5">${task.scheduledDate}${task.checkinNote ? ' · 有打卡备注' : ''}</div>
+          </button>`).join('')
+      : '<div class="px-3 py-4 text-center text-sm text-stone-400">未找到匹配的任务</div>';
+  }
+
+  function _setupGlobalSearchDelegates() {
+    if (_globalSearchDelegatesDone) return;
+    const host = document.getElementById('global-search-host');
+    if (!host) return;
+    _globalSearchDelegatesDone = true;
+    DOM.delegate(host, 'click', '#global-search-expand-btn', function() {
+      State.update('settings', { searchExpanded: true });
+      State.persist('settings');
+      renderGlobalSearch();
+      document.getElementById('global-search-input')?.focus();
+    });
+    DOM.delegate(host, 'input', '#global-search-input', function() {
+      renderGlobalSearchResults(this.value);
+    });
+    DOM.delegate(host, 'click', '.global-search-result', function() {
+      const date = this.dataset.date;
+      if (!date) return;
+      currentCalendarDate = date;
+      currentCalendarView = 'month';
+      history.replaceState(null, '', '#/calendar');
+      handleRouteDirect('calendar');
     });
   }
 
@@ -411,15 +630,6 @@ const App = (() => {
     const viewModeClass = settings.viewMode === 'compact' ? 'space-y-1' : 'space-y-3';
 
     el.innerHTML = `
-      <!-- 搜索栏 -->
-      <div class="px-4 pt-3 pb-2">
-        <div class="relative">
-          <i class="fa fa-search absolute left-3 top-1/2 -translate-y-1/2 text-stone-400 text-sm"></i>
-          <input type="text" id="search-input" placeholder="搜索任务..."
-            class="w-full pl-9 pr-4 py-2.5 bg-stone-50 border border-stone-100 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-amber-300 focus:border-amber-300 transition-all">
-        </div>
-      </div>
-
 	      <!-- 今日任务列表 -->
       <div class="px-4 mt-3">
         <div class="flex items-center justify-between mb-3">
@@ -450,15 +660,12 @@ const App = (() => {
           <button id="batch-cancel" class="px-2 py-1 rounded-lg bg-stone-200 text-stone-600 hover:bg-stone-300 transition-all">取消</button>
         </div>
 
-        ${todayTasks.length === 0
-          ? `<div class="text-center py-10 text-stone-400">
-               <div class="text-4xl mb-3">📝</div>
-               <p class="text-sm">今天还没有任务，点击右下角 + 添加吧</p>
-             </div>`
-          : `<div class="${viewModeClass}" id="task-list">
-               ${todayTasks.map(t => renderTaskCard(t, subjects)).join('')}
-             </div>`
-        }
+        <div class="${viewModeClass}" id="task-list">
+          ${renderTaskList(todayTasks, subjects, `<div class="text-center py-10 text-stone-400">
+            <div class="text-4xl mb-3">📝</div>
+            <p class="text-sm">今天还没有任务，点击右下角 + 添加吧</p>
+          </div>`)}
+        </div>
       </div>
 
       <!-- 统计卡片 -->
@@ -491,6 +698,7 @@ const App = (() => {
 
     // 事件绑定
     bindHomeEvents();
+    mountVirtualTaskLists(el, todayTasks, subjects);
 
     // 绑定悬浮添加按钮
     const fabBtn = document.getElementById('fab-add-task');
@@ -524,10 +732,11 @@ const App = (() => {
             const subjectId = document.getElementById('fab-subject').value;
             const content = document.getElementById('fab-content').value;
             const date = document.getElementById('fab-date').value;
-            if (!content.trim()) { Toast.error('请输入任务内容'); return; }
+            if (!content.trim()) { Toast.error('请输入任务内容'); return false; }
             const result = TaskModule.addTask({ subjectId, content: content.trim(), scheduledDate: date });
             if (result.ok) { Toast.success('任务已添加'); renderHome(); }
             else { Toast.error(result.msg); }
+            if (!result.ok) return false;
           }
         });
       });
@@ -535,32 +744,6 @@ const App = (() => {
   }
 
   function bindHomeEvents() {
-    // 搜索
-    const searchInput = document.getElementById('search-input');
-    if (searchInput) {
-      const _handleSearch = e => {
-        const query = e.target.value;
-        const taskList = document.getElementById('task-list');
-        if (!taskList) return;
-        const subjects = SubjectModule.getAll();
-        if (!query || !query.trim()) {
-          const today = DateUtils.today();
-          const todayTasks = TaskModule.getTasksByDate(today);
-          taskList.innerHTML = todayTasks.map(t => renderTaskCard(t, subjects)).join('');
-          return;
-        }
-        const results = TaskModule.searchTasks(query);
-        if (results.length > 0) {
-          taskList.innerHTML = results.map(t => renderTaskCard(t, subjects)).join('');
-        } else {
-          taskList.innerHTML = '<div class="text-center py-6 text-stone-400 text-sm">未找到匹配的任务</div>';
-        }
-      };
-      // 移除旧监听器避免重复绑定
-      searchInput.removeEventListener('input', _handleSearch);
-      searchInput.addEventListener('input', _handleSearch);
-    }
-
     // 批量导入
     const batchImportBtn = document.getElementById('batch-import-btn');
     if (batchImportBtn) {
@@ -587,9 +770,11 @@ const App = (() => {
                 if (currentPage === 'home') renderHome();
               } else {
                 Toast.error(result.msg);
+                return false;
               }
             } catch (e) {
               Toast.error('导入失败，请检查数据格式');
+              return false;
             }
           }
         });
@@ -622,7 +807,9 @@ const App = (() => {
   }
 
   // ─── 批量操作模式 ───
-  let batchSelected = new Set();
+  // 批量选择状态需要被 index.html 的全局任务委托读取，挂到 window 以保持同一份 Set。
+  window._batchSelected = window._batchSelected || new Set();
+  const batchSelected = window._batchSelected;
 
   // batchSelected 存储 key 为 taskId，在页面离开时清空
   function _clearBatchSelection() {
@@ -645,7 +832,12 @@ const App = (() => {
     function exitBatchMode() {
       batchSelected.clear();
       if (toolbar) toolbar.classList.add('hidden');
-      document.querySelectorAll('.batch-check').forEach(el => el.classList.add('hidden'));
+      document.querySelectorAll('.batch-check').forEach(el => {
+        el.classList.add('hidden');
+        el.classList.remove('bg-amber-400', 'border-amber-400');
+        const icon = el.querySelector('i');
+        if (icon) icon.classList.add('hidden');
+      });
       // 移除选中高亮
       document.querySelectorAll('.task-card').forEach(el => el.classList.remove('ring-2', 'ring-amber-300'));
     }
@@ -684,9 +876,14 @@ const App = (() => {
     if (migrateBtn) migrateBtn.addEventListener('click', () => {
       if (batchSelected.size === 0) { Toast.warning('请先选择任务'); return; }
       const targetDate = prompt('目标日期 (YYYY-MM-DD)：', DateUtils.today());
-      if (!targetDate || !Validate.isValidDate(targetDate)) return;
-      TaskModule.batchMigrate([...batchSelected], targetDate);
-      Toast.success(`已迁移 ${batchSelected.size} 个任务至 ${targetDate}`);
+      if (!targetDate) return;
+      if (!Validate.isValidDate(targetDate)) {
+        Toast.warning('\u8bf7\u8f93\u5165\u6709\u6548\u7684\u65e5\u671f');
+        return;
+      }
+      const result = TaskModule.batchMigrate([...batchSelected], targetDate);
+      if (!result.ok) { Toast.warning(result.msg); return; }
+      Toast.success(`已迁移 ${batchSelected.size} 个任务至 ${result.targetDate || targetDate}`);
       exitBatchMode();
     });
 
@@ -726,7 +923,45 @@ const App = (() => {
     });
   }
 
-  function renderTaskCard(task, subjects) {
+  function renderTaskList(tasks, subjects, emptyHTML) {
+    if (tasks.length === 0) return emptyHTML;
+    if (tasks.length <= 50) return tasks.map(t => renderTaskCard(t, subjects, { animate: true })).join('');
+    const rowHeight = 78;
+    return `<div class="task-virtual-list" data-row-height="${rowHeight}">
+      <div class="task-virtual-spacer" style="height:${tasks.length * rowHeight}px">
+        <div class="task-virtual-content"></div>
+      </div>
+    </div>`;
+  }
+
+  function mountVirtualTaskLists(root, tasks, subjects) {
+    const lists = root.matches?.('.task-virtual-list')
+      ? [root]
+      : [...root.querySelectorAll('.task-virtual-list')];
+    lists.forEach(list => {
+      list._virtualTasks = tasks;
+      list._virtualSubjects = subjects;
+      const rowHeight = Number(list.dataset.rowHeight) || 78;
+      const renderRange = () => {
+        const content = list.querySelector('.task-virtual-content');
+        if (!content) return;
+        const viewportHeight = list.clientHeight || 420;
+        const start = Math.max(0, Math.floor(list.scrollTop / rowHeight) - 5);
+        const end = Math.min(tasks.length, Math.ceil((list.scrollTop + viewportHeight) / rowHeight) + 5);
+        content.innerHTML = tasks.slice(start, end).map((task, index) => `
+          <div class="task-virtual-row" style="top:${(start + index) * rowHeight}px;height:${rowHeight - 4}px">
+            ${renderTaskCard(task, subjects, { animate: false })}
+          </div>`).join('');
+      };
+      if (!list._virtualBound) {
+        list._virtualBound = true;
+        list.addEventListener('scroll', renderRange, { passive: true });
+      }
+      renderRange();
+    });
+  }
+
+  function renderTaskCard(task, subjects, options = {}) {
     const sub = subjects.find(s => s.id === task.subjectId);
     const subColor = sub ? sub.color : '#a8a29e';
     const subName = sub ? Validate.sanitizeHTML(sub.name) : '';
@@ -744,7 +979,8 @@ const App = (() => {
     </div>`;
 
     const contentClass = settings.viewMode === 'compact' ? 'py-2.5' : 'py-4';
-    const cardClass = `task-card bg-white rounded-xl border ${isCompleted ? 'border-emerald-100 bg-emerald-50/30' : 'border-stone-100'} ${contentClass} flex items-center gap-3 px-3 transition-all duration-300 hover:shadow-sm`;
+    const animationClass = options.animate === false ? '' : 'task-card-enter';
+    const cardClass = `task-card ${animationClass} bg-white rounded-xl border ${isCompleted ? 'border-emerald-100 bg-emerald-50/30' : 'border-stone-100'} ${contentClass} flex items-center gap-3 px-3 transition-all duration-300 hover:shadow-sm`;
 
     if (checkboxLeft) {
       return `
@@ -1109,7 +1345,9 @@ const App = (() => {
                 <span class="cursor-grab text-stone-300"><i class="fa fa-bars text-xs"></i></span>
                 <span class="w-3 h-3 rounded-full flex-shrink-0" style="background-color:${s.color}"></span>
                 <span class="flex-1 text-stone-700 truncate">${s.name}</span>
-                ${s.isPreset ? '<span class="text-[10px] text-stone-400 flex-shrink-0">预置</span>' : `<button class="text-xs text-orange-400 hover:text-orange-600 flex-shrink-0 delete-subject" data-id="${s.id}">删除</button>`}
+                ${s.isPreset ? '<span class="text-[10px] text-stone-400 flex-shrink-0">预置</span>' : ''}
+                <button class="text-xs text-stone-400 hover:text-amber-600 flex-shrink-0 rename-subject" data-id="${s.id}">重命名</button>
+                ${s.isPreset ? '' : `<button class="text-xs text-orange-400 hover:text-orange-600 flex-shrink-0 delete-subject" data-id="${s.id}">删除</button>`}
               </div>
             `).join('')}
           </div>
@@ -1132,6 +1370,46 @@ const App = (() => {
           </div>
         </div>
 
+        <!-- 显示与提醒 -->
+        <div class="bg-white rounded-2xl border border-stone-100 p-4 shadow-sm">
+          <h3 class="font-bold text-stone-800 text-sm mb-3">显示与提醒</h3>
+          <div class="space-y-3 text-sm">
+            <div>
+              <div class="text-stone-600 mb-1.5">任务列表密度</div>
+              <div class="flex gap-2">
+                <button class="settings-choice flex-1 px-3 py-2 rounded-lg border text-xs transition-all ${settings.viewMode === 'compact' ? 'bg-amber-100 border-amber-300 text-amber-700' : 'border-stone-200 text-stone-500'}" data-setting="viewMode" data-value="compact">紧凑</button>
+                <button class="settings-choice flex-1 px-3 py-2 rounded-lg border text-xs transition-all ${settings.viewMode === 'comfortable' ? 'bg-amber-100 border-amber-300 text-amber-700' : 'border-stone-200 text-stone-500'}" data-setting="viewMode" data-value="comfortable">宽松</button>
+              </div>
+            </div>
+            <div>
+              <div class="text-stone-600 mb-1.5">任务条目样式</div>
+              <div class="flex gap-2">
+                <button class="settings-choice flex-1 px-3 py-2 rounded-lg border text-xs transition-all ${settings.taskStyle === 'checkbox-left' ? 'bg-amber-100 border-amber-300 text-amber-700' : 'border-stone-200 text-stone-500'}" data-setting="taskStyle" data-value="checkbox-left">勾选框居左</button>
+                <button class="settings-choice flex-1 px-3 py-2 rounded-lg border text-xs transition-all ${settings.taskStyle === 'checkbox-right' ? 'bg-amber-100 border-amber-300 text-amber-700' : 'border-stone-200 text-stone-500'}" data-setting="taskStyle" data-value="checkbox-right">勾选框居右</button>
+              </div>
+            </div>
+            <div class="flex items-center justify-between">
+              <span class="text-stone-600">每日 ${settings.breakWarningTime || '22:00'} 断卡预警</span>
+              <label class="relative inline-flex items-center cursor-pointer">
+                <input type="checkbox" id="break-warning" class="sr-only peer" ${settings.breakWarning ? 'checked' : ''}>
+                <span class="w-10 h-5 bg-stone-300 rounded-full peer-checked:bg-amber-400 transition-all"></span>
+                <span class="absolute left-0.5 top-0.5 w-4 h-4 bg-white rounded-full shadow transition-all peer-checked:translate-x-5"></span>
+              </label>
+            </div>
+            <div class="flex items-center justify-between gap-3">
+              <span class="text-stone-600">预警时间</span>
+              <input type="time" id="break-warning-time" value="${settings.breakWarningTime || '22:00'}" class="px-2 py-1.5 text-xs border border-stone-200 rounded-lg">
+            </div>
+            <div>
+              <div class="text-stone-600 mb-1.5">搜索框显示方式</div>
+              <div class="flex gap-2">
+                <button class="settings-choice flex-1 px-3 py-2 rounded-lg border text-xs transition-all ${!settings.searchExpanded ? 'bg-amber-100 border-amber-300 text-amber-700' : 'border-stone-200 text-stone-500'}" data-setting="searchExpanded" data-value="false">点击展开</button>
+                <button class="settings-choice flex-1 px-3 py-2 rounded-lg border text-xs transition-all ${settings.searchExpanded ? 'bg-amber-100 border-amber-300 text-amber-700' : 'border-stone-200 text-stone-500'}" data-setting="searchExpanded" data-value="true">固定展示</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <!-- 周期休息日 -->
         <div class="bg-white rounded-2xl border border-stone-100 p-4 shadow-sm">
           <h3 class="font-bold text-stone-800 text-sm mb-3">🏖️ 周期休息日</h3>
@@ -1146,7 +1424,10 @@ const App = (() => {
         <div class="bg-white rounded-2xl border border-stone-100 p-4 shadow-sm">
           <div class="flex items-center justify-between mb-3">
             <h3 class="font-bold text-stone-800 text-sm">📅 临时休息日</h3>
-            <button id="add-temp-rest-btn" class="text-xs text-amber-600 font-medium">+ 新增</button>
+            <div class="flex items-center gap-2">
+              <button id="add-temp-rest-batch-btn" class="text-xs text-stone-500 font-medium">批量新增</button>
+              <button id="add-temp-rest-btn" class="text-xs text-amber-600 font-medium">+ 新增</button>
+            </div>
           </div>
           ${tempRests.length === 0 ? '<p class="text-xs text-stone-400">暂无临时休息日</p>' : tempRests.map(r => `
             <div class="flex items-center justify-between text-sm py-1">
@@ -1154,6 +1435,7 @@ const App = (() => {
               <button class="text-xs text-orange-400 remove-temp-rest" data-id="${r.id}">取消</button>
             </div>
           `).join('')}
+          ${tempRests.length > 1 ? '<button id="cancel-all-temp-rest-btn" class="mt-2 text-xs text-orange-500">批量取消全部临时休息日</button>' : ''}
         </div>
 
         <!-- 请假管理 -->
@@ -1189,6 +1471,7 @@ const App = (() => {
                     <span class="text-[10px] text-stone-400">${typeLabel}${sub ? ' · ' + sub.name : ''} ${r.enabled ? '' : '(已暂停)'}</span>
                   </div>
                   <div class="flex gap-1 flex-shrink-0">
+                    <button class="text-xs px-2 py-1 rounded-lg bg-blue-50 text-blue-500 edit-recurring" data-id="${r.id}">编辑</button>
                     <button class="text-xs px-2 py-1 rounded-lg ${r.enabled ? 'bg-stone-100 text-stone-500' : 'bg-emerald-100 text-emerald-600'} toggle-recurring" data-id="${r.id}">${r.enabled ? '暂停' : '启用'}</button>
                     <button class="text-xs px-2 py-1 rounded-lg bg-red-50 text-red-400 delete-recurring" data-id="${r.id}">删除</button>
                   </div>
@@ -1267,8 +1550,14 @@ const App = (() => {
 
     var ei = document.getElementById('exam-date-input');
     if (ei) ei.onchange = function() {
+      if (this.value && !Validate.isValidDate(this.value)) {
+        this.value = State.get('settings').examDate;
+        Toast.warning('\u8bf7\u8f93\u5165\u6709\u6548\u7684\u8003\u7814\u65e5\u671f');
+        return;
+      }
       State.update('settings', { examDate: this.value });
       State.persist('settings');
+      RecurringModule.refresh();
       Toast.success('考研日期已更新');
     };
   }

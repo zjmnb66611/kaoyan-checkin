@@ -180,6 +180,10 @@
     to { opacity: 1; transform: translateX(0); }
   }
 
+  .task-card-enter {
+    animation: slideInRight 0.22s ease both;
+  }
+
   .page-container {
     animation: fadeIn 0.25s ease;
   }
@@ -324,6 +328,26 @@
   .task-content.expanded {
     -webkit-line-clamp: unset;
   }
+
+  /* 大量任务只保留可视区域节点，避免一次性渲染拖慢页面。 */
+  .task-virtual-list {
+    max-height: min(65vh, 620px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scroll-behavior: smooth;
+  }
+
+  .task-virtual-spacer {
+    position: relative;
+    width: 100%;
+  }
+
+  .task-virtual-row {
+    position: absolute;
+    left: 0;
+    right: 0;
+    padding-bottom: 4px;
+  }
 </style>
 </head>
 <body>
@@ -352,6 +376,9 @@
 
   <!-- ═══ 主内容区域 ═══ -->
   <div class="main-content relative">
+    <!-- 全局搜索 -->
+    <div id="global-search-host" class="px-4 pt-3"></div>
+
     <!-- 首页 -->
     <div class="page-container" id="page-home" style="display:none;"></div>
 
@@ -463,15 +490,15 @@ document.addEventListener('click', e => {
     const toolbar = document.getElementById('batch-toolbar');
     if (!toolbar || toolbar.classList.contains('hidden')) return; // 批量模式未激活
     const taskId = batchCheck.dataset.taskId;
-    if (batchSelected.has(taskId)) {
-      batchSelected.delete(taskId);
+    if (window._batchSelected.has(taskId)) {
+      window._batchSelected.delete(taskId);
       batchCheck.classList.remove('bg-amber-400', 'border-amber-400');
       const icon = batchCheck.querySelector('i');
       if (icon) icon.classList.add('hidden');
       const card = batchCheck.closest('.task-card');
       if (card) card.classList.remove('ring-2', 'ring-amber-300');
     } else {
-      batchSelected.add(taskId);
+      window._batchSelected.add(taskId);
       batchCheck.classList.add('bg-amber-400', 'border-amber-400');
       const icon = batchCheck.querySelector('i');
       if (icon) icon.classList.remove('hidden');
@@ -479,7 +506,7 @@ document.addEventListener('click', e => {
       if (card) card.classList.add('ring-2', 'ring-amber-300');
     }
     const countEl = document.getElementById('batch-count');
-    if (countEl) countEl.textContent = `已选 ${batchSelected.size} 项`;
+    if (countEl) countEl.textContent = `已选 ${window._batchSelected.size} 项`;
     return;
   }
 
@@ -523,9 +550,19 @@ document.addEventListener('click', e => {
       }),
       createMenuItem('📅 迁移日期', () => {
         const newDate = prompt('请输入目标日期 (YYYY-MM-DD)：', DateUtils.today());
-        if (newDate && Validate.isValidDate(newDate)) {
-          TaskModule.updateTask(taskId, { scheduledDate: newDate });
-          Toast.success('任务已迁移');
+        if (!newDate) return;
+        if (!Validate.isValidDate(newDate)) {
+          Toast.warning('\u8bf7\u8f93\u5165\u6709\u6548\u7684\u65e5\u671f');
+          return;
+        }
+        const result = TaskModule.updateTask(taskId, { scheduledDate: newDate });
+        if (!result.ok) {
+          Toast.warning(result.msg);
+        } else {
+          const suffix = result.task.scheduledDate !== newDate
+            ? '\uff0c\u5df2\u8c03\u6574\u81f3 ' + result.task.scheduledDate
+            : '';
+          Toast.success('\u4efb\u52a1\u5df2\u8fc1\u79fb' + suffix);
         }
       }),
       createMenuItem('📝 打卡备注', () => {
@@ -591,7 +628,16 @@ document.addEventListener('touchstart', e => {
       }),
       createMenuItem('📅 迁移日期', () => {
         const newDate = prompt('目标日期 (YYYY-MM-DD)：', DateUtils.today());
-        if (newDate && Validate.isValidDate(newDate)) TaskModule.updateTask(taskId, { scheduledDate: newDate });
+        if (!newDate) return;
+        if (!Validate.isValidDate(newDate)) {
+          Toast.warning('\u8bf7\u8f93\u5165\u6709\u6548\u7684\u65e5\u671f');
+          return;
+        }
+        const result = TaskModule.updateTask(taskId, { scheduledDate: newDate });
+        if (!result.ok) Toast.warning(result.msg);
+        else if (result.task.scheduledDate !== newDate) {
+          Toast.info('\u4f11\u606f\u65e5\u4efb\u52a1\u5df2\u8c03\u6574\u81f3 ' + result.task.scheduledDate);
+        }
       }),
       createMenuItem('🗑️ 删除任务', () => TaskModule.deleteTask(taskId), 'text-orange-500'),
     ]);

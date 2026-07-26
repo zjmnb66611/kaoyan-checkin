@@ -19,7 +19,7 @@ const App = (() => {
     // 刷新周期性任务
     RecurringModule.refresh();
 
-    // 昨日有未完成任务时，后续待完成计划整体顺延一天。
+    // 昨日有未完成任务时，只顺延对应科目的后续待完成计划。
     TaskModule.postponeUncompletedTasks(DateUtils.addDays(DateUtils.today(), -1));
 
     // 统一处理已配置的休息日/请假日，确保后续计划按序后移且不会重复后移。
@@ -234,8 +234,7 @@ const App = (() => {
         `,
         showCancel: true,
         cancelText: '关闭',
-        confirmText: '',
-        onConfirm: () => {}
+        showConfirm: false
       });
       setTimeout(() => {
         const keepBtn = document.querySelector('.revoke-keep');
@@ -1401,8 +1400,11 @@ const App = (() => {
         <!-- 任务顺延规则 -->
         <div class="bg-white rounded-2xl border border-stone-100 p-4 shadow-sm">
           <h3 class="font-bold text-stone-800 text-sm mb-3">🔄 任务顺延规则</h3>
-          <div class="flex items-center justify-between cursor-pointer" id="postpone-toggle">
-            <span class="text-sm text-stone-600">未完成时，后续计划整体顺延一天</span>
+          <div class="flex items-center justify-between gap-3 cursor-pointer" id="postpone-toggle">
+            <span class="min-w-0">
+              <span class="block text-sm text-stone-600">按科目顺延未完成计划</span>
+              <span class="block mt-1 text-xs text-stone-400">仅顺延出现未完成任务的科目，其他科目保持原计划</span>
+            </span>
             <div class="relative pointer-events-none">
               <input type="checkbox" id="auto-postpone" style="position:absolute;opacity:0;pointer-events:none;width:0;height:0" ${settings.autoPostpone ? 'checked' : ''}>
               <div class="toggle-bg w-11 h-6 rounded-full transition-all ${settings.autoPostpone ? 'bg-amber-400' : 'bg-stone-300'}"></div>

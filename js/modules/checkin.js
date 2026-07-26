@@ -27,7 +27,11 @@ const CheckinModule = (() => {
   }
 
   function addCheckinNote(taskId, note) {
-    return TaskModule.updateTask(taskId, { checkinNote: note });
+    const normalizedNote = String(note ?? '').trim();
+    if (normalizedNote.length > 500) {
+      return { ok: false, msg: '打卡备注不能超过 500 个字符' };
+    }
+    return TaskModule.updateTask(taskId, { checkinNote: normalizedNote });
   }
 
   // 补卡
@@ -129,6 +133,8 @@ const CheckinModule = (() => {
     if (!settings.breakWarning) return;
 
     const today = DateUtils.today();
+    const stats = State.get('checkinStats');
+    if (stats.breakWarningLastShownDate === today) return;
     if (RestModule.isRestDay(today)) return;
 
     const now = new Date();
@@ -140,6 +146,8 @@ const CheckinModule = (() => {
 
     const hasCheckin = todayTasks.some(t => t.status === 'completed');
     if (!hasCheckin) {
+      State.update('checkinStats', { breakWarningLastShownDate: today });
+      State.persist('checkinStats');
       document.dispatchEvent(new CustomEvent('break-warning'));
     }
   }

@@ -95,6 +95,21 @@ const TaskModule = (() => {
     // 防止意外覆盖 id
     const safeUpdates = { ...updates };
     delete safeUpdates.id;
+    if (Object.prototype.hasOwnProperty.call(safeUpdates, 'content')) {
+      if (!Validate.isValidTask(safeUpdates.content)) {
+        return { ok: false, msg: '任务内容应为 1-500 个字符' };
+      }
+      safeUpdates.content = safeUpdates.content.trim();
+    }
+    if (Object.prototype.hasOwnProperty.call(safeUpdates, 'checkinNote')) {
+      if (typeof safeUpdates.checkinNote !== 'string' || safeUpdates.checkinNote.length > 500) {
+        return { ok: false, msg: '打卡备注应少于 500 个字符' };
+      }
+      safeUpdates.checkinNote = safeUpdates.checkinNote.trim();
+    }
+    if (Object.prototype.hasOwnProperty.call(safeUpdates, 'status') && !['pending', 'completed'].includes(safeUpdates.status)) {
+      return { ok: false, msg: '任务状态无效' };
+    }
     if (Object.prototype.hasOwnProperty.call(safeUpdates, 'scheduledDate')) {
       const normalizedDate = normalizeScheduledDate(safeUpdates.scheduledDate);
       if (!normalizedDate) return { ok: false, msg: '任务日期无效' };
@@ -174,7 +189,8 @@ const TaskModule = (() => {
     return { ok: true };
   }
 
-  // 某日有未完成任务时，后续待完成计划整体后移一天。
+  // 某日有未完成任务时，只将对应科目的后续待完成计划后移一天。
+  // 未指定科目的任务视为同一个独立分组，不影响其他已分类科目。
   // 使用日期标记保证同一遗漏日期只处理一次，避免重复刷新持续后移。
   function postponeUncompletedTasks(dateStr) {
     const settings = State.get('settings');
@@ -182,14 +198,17 @@ const TaskModule = (() => {
 
     const tasks = _getRaw();
     const overdueDate = dateStr || DateUtils.addDays(DateUtils.today(), -1);
-    const hasUncompletedTask = tasks.some(task =>
-      task.scheduledDate === overdueDate && task.status === 'pending' && !task.deleted
+    const overdueSubjectIds = new Set(
+      tasks
+        .filter(task => task.scheduledDate === overdueDate && task.status === 'pending' && !task.deleted)
+        .map(task => task.subjectId || '')
     );
-    if (!hasUncompletedTask) return;
+    if (overdueSubjectIds.size === 0) return;
 
     let changed = false;
     tasks
       .filter(task => task.scheduledDate >= overdueDate && task.status === 'pending' && !task.deleted)
+      .filter(task => overdueSubjectIds.has(task.subjectId || ''))
       .filter(task => !(task.postponedByAutoPostponeDates || []).includes(overdueDate))
       .forEach(task => {
         task.scheduledDate = DateUtils.addDays(task.scheduledDate, 1);

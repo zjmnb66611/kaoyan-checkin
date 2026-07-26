@@ -10,7 +10,7 @@ const RecurringModule = (() => {
     const trimmedContent = (content || '').trim();
     const normalizedWeekDays = [...new Set((weekDays || []).map(Number))]
       .filter(day => Number.isInteger(day) && day >= 0 && day <= 6);
-    if (!trimmedContent) return { ok: false, msg: '任务内容不能为空' };
+    if (!Validate.isValidTask(trimmedContent)) return { ok: false, msg: '任务内容应为 1-500 个字符' };
     if (!Validate.isValidDate(startDate || DateUtils.today())) return { ok: false, msg: '开始日期无效' };
     if (ruleType === 'weekly' && normalizedWeekDays.length === 0) {
       return { ok: false, msg: '每周重复任务至少选择一天' };
@@ -73,7 +73,7 @@ const RecurringModule = (() => {
     const rule = rules.find(item => item.id === id && !item.deleted);
     if (!rule) return { ok: false, msg: '重复任务不存在' };
     const content = (updates.content || '').trim();
-    if (!content) return { ok: false, msg: '任务内容不能为空' };
+    if (!Validate.isValidTask(content)) return { ok: false, msg: '任务内容应为 1-500 个字符' };
     if (updates.startDate && !Validate.isValidDate(updates.startDate)) {
       return { ok: false, msg: '开始日期无效' };
     }
